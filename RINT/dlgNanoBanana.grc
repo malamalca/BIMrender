@@ -1,0 +1,12 @@
+#include "ResourceIds.hpp"
+
+/* *****************************************************************************
+// NanoBanana AI Render MODAL DIALOG  (debug builds)
+// ****************************************************************************/
+'GDLG'  ID_DLG_NANOBANANA  Modal | grow   0   0  480  656  "AI Render"  {
+/* [  1] */ Browser			0     0  480  656
+}
+
+'DLGH'  ID_DLG_NANOBANANA  ID_DLG_NANOBANANA_Help {
+1	"AI Render"		Browser_1
+}

@@ -1,0 +1,94 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "default"
+    },
+    {
+      "name": "ac27-INT",
+      "cacheVariables": {
+        "AC_API_DEVKIT_DIR": "D:\\ArchicadDev\\GRAPHISOFT\\API Development Kit 27.3001"
+      }
+    },
+    {
+      "name": "ac28-INT",
+      "cacheVariables": {
+        "AC_API_DEVKIT_DIR": "D:\\ArchicadDev\\GRAPHISOFT\\API Development Kit 28.2000"
+      }
+    },
+    {
+      "name": "ac29-INT",
+      "cacheVariables": {
+        "AC_API_DEVKIT_DIR": "D:\\ArchicadDev\\GRAPHISOFT\\API Development Kit 29.3100"
+      }
+    },
+    {
+      "name": "ac29-INT-MAC",
+      "cacheVariables": {
+        "AC_API_DEVKIT_DIR": "/users/miha.nahtigal/Development/API.Development.Kit.MAC.29.3100"
+      }
+    },
+    {
+      "name": "debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":"Debug",
+        "AC_API_DEVKIT_DIR": "D:\\ArchicadDev\\GRAPHISOFT\\API Development Kit 27.3001"
+      }
+    },
+    {
+      "name": "debug29",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":"Debug",
+        "AC_API_DEVKIT_DIR": "D:\\ArchicadDev\\GRAPHISOFT\\API Development Kit 29.3100"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default-release",
+      "configurePreset": "default",
+      "configuration": "Release"
+    },
+    {
+      "name": "default-debug",
+      "configurePreset": "default",
+      "configuration": "Debug"
+    },
+    {
+      "name": "ac27-INT-Debug",
+      "configurePreset": "ac27-INT",
+      "configuration": "Debug",
+      "environment": {"CMAKE_BUILD_TYPE":"Debug"}
+    },
+    {
+      "name": "ac27-INT-Release",
+      "configurePreset": "ac27-INT",
+      "configuration": "Release"
+    },
+    {
+      "name": "ac28-debug",
+      "configurePreset": "ac28-INT",
+      "configuration": "Debug"
+    },
+    {
+      "name": "ac28-INT",
+      "configurePreset": "ac28-INT",
+      "configuration": "Release"
+    },
+    {
+      "name": "ac29-debug",
+      "configurePreset": "ac29-INT",
+      "configuration": "Debug"
+    },
+    {
+      "name": "ac29-debug-mac",
+      "configurePreset": "ac29-INT-MAC",
+      "configuration": "Debug"
+    },
+    {
+      "name": "ac29-INT",
+      "configurePreset": "ac29-INT",
+      "configuration": "Release"
+    }
+  ]
+}

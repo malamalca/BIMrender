@@ -1,0 +1,3 @@
+"D:\Dev\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" "-DAC_API_DEVKIT_DIR=D:\ArchicadDev\GRAPHISOFT\API Development Kit 29.3100" -SD:/ArchicadDev/Addons/BIMrender -BD:/ArchicadDev/Addons/BIMrender/out/build/ac29-INT
+"D:\Dev\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build D:/ArchicadDev/Addons/BIMrender/out/build/ac29-INT --config Release --
+copy .\out\build\ac29-INT\Release\BIMrender.apx .\Releases

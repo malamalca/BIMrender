@@ -1,0 +1,12 @@
+#include "ResourceIds.hpp"
+
+/* *****************************************************************************
+// NanoBanana AI Render MODELESS PALETTE  (release builds)
+// ****************************************************************************/
+'GDLG'  ID_PALETTE_NANOBANANA  Palette | topCaption | close | grow   0   0  480  656  "AI Render"  {
+/* [  1] */ Browser			0     0  480  656
+}
+
+'DLGH'  ID_PALETTE_NANOBANANA  ID_PALETTE_NANOBANANA_Help {
+1	"AI Render"		Browser_1
+}

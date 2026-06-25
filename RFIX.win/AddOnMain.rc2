@@ -1,0 +1,7 @@
+#include "BIMrender.grc.rc2"
+#include "BIMrenderFix.grc.rc2"
+#include "palNanoBanana.grc.rc2"
+#include "dlgNanoBanana.grc.rc2"
+#include "dlgNanoBananaSettings.grc.rc2"
+
+1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico

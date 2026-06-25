@@ -1,0 +1,16 @@
+#include "ResourceIds.hpp"
+
+'STR#' ID_ADDON_INFO "Add-on Name and Description" {
+/* [  1] */		"BIMrender"
+/* [  2] */		"BIMrender :: AI rendering for ARHIM d.o.o."
+}
+
+'STR#' ID_MENU_NANOBANANA "Menu strings" {
+/* [   ] */		"BIMrender"
+/* [  1] */			"AI Render…^E3^ES^EE^EI^ET^EM^EW^EL"
+}
+
+'STR#' ID_MENU_PROMPT_NANOBANANA "Prompt strings" {
+/* [   ] */		"BIMrender"
+/* [  1] */			"Open the AI render palette"
+}

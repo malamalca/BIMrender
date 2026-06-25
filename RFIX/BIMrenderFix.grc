@@ -1,0 +1,10 @@
+#include "ResourceIds.hpp"
+
+'MDID' ID_ADDON_IDENTIFIER "Add-On Identifier" {
+	1211329892
+	439119418
+}
+
+'DATA' ID_DATA_NANOBANANA_HTML "NanoBanana Html" {
+	"nanoBanana.html"
+}

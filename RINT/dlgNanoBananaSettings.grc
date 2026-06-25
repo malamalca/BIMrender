@@ -1,0 +1,60 @@
+#include "ResourceIds.hpp"
+
+/* *****************************************************************************
+// NanoBanana Settings MODAL DIALOG
+//
+// IMPORTANT: dialog item IDs are POSITIONAL — assigned by order of appearance,
+// not by the bracket-number comment.  Items must be listed in ID order so they
+// match the control IDs in dlgNanoBananaSettings.hpp.  The three radio buttons
+// are kept on CONSECUTIVE ids (8,9,10) so DG groups them as one selection.
+// ****************************************************************************/
+'GDLG' ID_DLG_NANOBANANA_SETTINGS  Modal    0    0   440  455  "AI Render Settings" {
+/* [  1] edtApiKey    */ TextEdit       10   108   420   22    LargePlain  1024
+/* [  2] btnOk        */ Button        295   418    65   24    LargePlain  "OK"
+/* [  3] btnCancel    */ Button        365   418    65   24    LargePlain  "Cancel"
+/* [  4] lblInfo      */ LeftText       10    10   420   44    LargePlain  vTop  "Choose where images are generated. Gemini needs a billing-enabled Google API key (aistudio.google.com). Flux uses Black Forest Labs (api.bfl.ai). Local uses a self-hosted SD WebUI / Forge (img2img)."
+/* [  5] popModel     */ PopupControl   10   154   420   22    80   3
+                                            NoIcon  "gemini-3.1-flash-image"
+                                            NoIcon  "gemini-2.5-flash-image"
+                                            NoIcon  "gemini-3-pro-image"
+/* [  6] lblApiKey    */ LeftText       10    90   200   16    LargePlain  vCenter  "API key:"
+/* [  7] lblModel     */ LeftText       10   136   200   16    LargePlain  vCenter  "Gemini engine:"
+/* [  8] rbGemini     */ RadioButton    10    60    90   18    LargePlain  1   "Gemini"
+/* [  9] rbFlux       */ RadioButton   105    60    65   18    LargePlain  1   "Flux"
+/* [ 10] rbLocal      */ RadioButton   175    60   255   18    LargePlain  1   "Local (Forge / A1111)"
+/* [ 11] lblFluxKey   */ LeftText       10   194   200   16    LargePlain  vCenter  "Flux API key:"
+/* [ 12] edtFluxKey   */ TextEdit       10   212   420   22    LargePlain  1024
+/* [ 13] lblFluxUrl   */ LeftText       10   240   200   16    LargePlain  vCenter  "Server URL:"
+/* [ 14] edtFluxUrl   */ TextEdit       10   258   420   22    LargePlain  256
+/* [ 15] lblFluxModel */ LeftText       10   286   200   16    LargePlain  vCenter  "Model name:"
+/* [ 16] edtFluxModel */ TextEdit       10   304   420   22    LargePlain  256
+/* [ 17] lblLocalUrl  */ LeftText       10   348   300   16    LargePlain  vCenter  "WebUI server URL (http://host:port):"
+/* [ 18] edtLocalUrl  */ TextEdit       10   366   420   22    LargePlain  256
+}
+
+'DLGH'  ID_DLG_NANOBANANA_SETTINGS  ID_DLG_NANOBANANA_SETTINGS_Help {
+1	""				TextEdit_1
+2	""				Button_1
+3	""				Button_2
+4	""				LeftText_1
+5	""				PopupControl_0
+6	""				LeftText_2
+7	""				LeftText_3
+8	""				RadioButton_0
+9	""				RadioButton_1
+10	""				RadioButton_2
+11	""				LeftText_4
+12	""				TextEdit_2
+13	""				LeftText_5
+14	""				TextEdit_3
+15	""				LeftText_6
+16	""				TextEdit_4
+17	""				LeftText_7
+18	""				TextEdit_5
+}
+
+'STR#' ID_DLG_NANOBANANA_SETTINGS "Dialog strings" {
+/* [  1] */		"AI Render Settings"
+/* [  2] */		"OK"
+/* [  3] */		"Cancel"
+}
