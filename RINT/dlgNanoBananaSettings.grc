@@ -13,7 +13,8 @@
 /* [  2] btnOk        */ Button        295   418    65   24    LargePlain  "OK"
 /* [  3] btnCancel    */ Button        365   418    65   24    LargePlain  "Cancel"
 /* [  4] lblInfo      */ LeftText       10    10   420   44    LargePlain  vTop  "Choose where images are generated. Gemini needs a billing-enabled Google API key (aistudio.google.com). Flux uses Black Forest Labs (api.bfl.ai). Local uses a self-hosted SD WebUI / Forge (img2img)."
-/* [  5] popModel     */ PopupControl   10   154   420   22    80   3
+/* [  5] popModel     */ PopupControl   10   154   420   22    80   4
+                                            NoIcon  "gemini-3.1-flash-lite-image"
                                             NoIcon  "gemini-3.1-flash-image"
                                             NoIcon  "gemini-2.5-flash-image"
                                             NoIcon  "gemini-3-pro-image"

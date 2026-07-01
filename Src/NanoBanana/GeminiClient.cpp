@@ -5,6 +5,7 @@
 
 #include "NanoBanana/GeminiClient.hpp"
 #include "NanoBanana/Base64.hpp"
+#include "NanoBanana/JsonUtils.hpp"
 #include "NanoBanana/Settings.hpp"
 
 #include "HTTP/Client/ClientConnection.hpp"
@@ -60,34 +61,6 @@ static GS::UniString FriendlyError (int status, const GS::UniString& raw)
 }
 
 // ---------------------------------------------------------------------------
-// Minimal JSON string escaping for the prompt text.
-// ---------------------------------------------------------------------------
-static std::string JsonEscape (const GS::UniString& s)
-{
-    const std::string in (s.ToCStr (0, MaxUSize, CC_UTF8).Get ());
-    std::string out;
-    out.reserve (in.size () + 16);
-    for (char c : in) {
-        switch (c) {
-            case '\"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char> (c) < 0x20) {
-                    char buf[8];
-                    snprintf (buf, sizeof (buf), "\\u%04x", c & 0xFF);
-                    out += buf;
-                } else {
-                    out += c;
-                }
-        }
-    }
-    return out;
-}
-
-// ---------------------------------------------------------------------------
 // Split a "data:<mime>;base64,<payload>" URL into mime + raw base64 payload.
 // ---------------------------------------------------------------------------
 static bool SplitDataUrl (const GS::UniString& dataUrl, std::string& mime, std::string& base64Payload)
@@ -104,19 +77,6 @@ static bool SplitDataUrl (const GS::UniString& dataUrl, std::string& mime, std::
     return !base64Payload.empty ();
 }
 
-// ---------------------------------------------------------------------------
-// Find an inline image payload inside candidates[0].content.parts[].
-// ---------------------------------------------------------------------------
-// Read a string member from a JSON object (empty when absent / not a string).
-static GS::UniString JStr (const JSON::ObjectValue& obj, const char* key)
-{
-    if (!obj.HasMember (key))
-        return GS::EmptyUniString;
-    const JSON::ValueRef v = obj.Get (key);
-    if (v && v->IsString ())
-        return JSON::StringValue::Cast (*v).Get ();
-    return GS::EmptyUniString;
-}
 
 // Build a friendly "no image" message from the candidate's finishReason and any
 // text the model returned instead of an image.
@@ -153,7 +113,7 @@ static bool ExtractImageData (const GS::UniString& responseJson, std::string& ou
         if (rootObj.HasMember ("error")) {
             const JSON::ValueRef errVal = rootObj.Get ("error");
             if (errVal && errVal->IsObject ()) {
-                const GS::UniString msg = JStr (JSON::ObjectValue::Cast (*errVal), "message");
+                const GS::UniString msg = JsonGetString (JSON::ObjectValue::Cast (*errVal), "message");
                 if (!msg.IsEmpty ()) { errMsg = msg; return false; }
             }
         }
@@ -163,7 +123,7 @@ static bool ExtractImageData (const GS::UniString& responseJson, std::string& ou
         if (rootObj.HasMember ("promptFeedback")) {
             const JSON::ValueRef pf = rootObj.Get ("promptFeedback");
             if (pf && pf->IsObject ()) {
-                const GS::UniString br = JStr (JSON::ObjectValue::Cast (*pf), "blockReason");
+                const GS::UniString br = JsonGetString (JSON::ObjectValue::Cast (*pf), "blockReason");
                 if (!br.IsEmpty ()) {
                     errMsg = GS::UniString ("Gemini blocked the request (blockReason: ") + br +
                              "). Rephrase the instruction or adjust the marked area.";
@@ -193,7 +153,7 @@ static bool ExtractImageData (const GS::UniString& responseJson, std::string& ou
         const JSON::ObjectValue& cand0Obj = JSON::ObjectValue::Cast (*cand0);
 
         // Why the model stopped (SAFETY, RECITATION, IMAGE_SAFETY, PROHIBITED_CONTENT, …).
-        const GS::UniString finishReason = JStr (cand0Obj, "finishReason");
+        const GS::UniString finishReason = JsonGetString (cand0Obj, "finishReason");
 
         // A candidate without content is a finishReason-only stop (blocked / declined).
         if (!cand0Obj.HasMember ("content"))
@@ -218,7 +178,7 @@ static bool ExtractImageData (const GS::UniString& responseJson, std::string& ou
             const JSON::ObjectValue& partObj = JSON::ObjectValue::Cast (*partVal);
 
             // Collect any text the model returned (an explanation when it declines).
-            const GS::UniString txt = JStr (partObj, "text");
+            const GS::UniString txt = JsonGetString (partObj, "text");
             if (!txt.IsEmpty ())
                 modelText += txt;
 
@@ -269,6 +229,104 @@ static void AppendInlineData (const GS::UniString& dataUrl, std::string& body)
     body += "\",\"data\":\"";
     body += b64;
     body += "\"}}";
+}
+
+// ---------------------------------------------------------------------------
+// One JSON POST to {model}:generateContent.  Fills respBody + HTTP status.
+// The API key travels in the x-goog-api-key header (not the URL), so it does not
+// leak into request logs / proxies.  Returns false only on a transport error.
+// ---------------------------------------------------------------------------
+static bool GeminiPostJson (const GS::UniString& apiKey,
+                            const GS::UniString& model,
+                            const std::string& body,
+                            GS::UniString& respBody,
+                            int& status,
+                            GS::UniString& errMsg)
+{
+    using namespace HTTP::Client;
+    using namespace HTTP::MessageHeader;
+    using namespace GS::IBinaryChannelUtilities;
+
+    GS::UniString path ("/v1beta/models/");
+    path += model;
+    path += ":generateContent";
+
+    try {
+        IO::URI::URI     connectionUrl (GS::UniString (kHost, CC_UTF8));
+        ClientConnection conn (connectionUrl);
+        conn.SetTimeout (120000);   // ms — generation can take a while, but never hang forever
+        conn.Connect ();
+
+        Request request (Method::Id::Post, path);
+        RequestHeaderFieldCollection& headers = request.GetRequestHeaderFieldCollection ();
+        headers.Add (HeaderFieldName::ContentType, "application/json");
+        headers.Add (GS::UniString ("x-goog-api-key"), apiKey);
+        headers.Add (HeaderFieldName::UserAgent,   "arUtils-NanoBanana");
+
+        // The body is handed to Send directly (do NOT pre-write a content channel).
+        conn.Send (request, body.data (), static_cast<GS::USize> (body.size ()));
+        conn.FinishSend ();
+
+        Response response;
+        GS::IChannelX channel (conn.BeginReceive (response), GS::GetNetworkByteOrderIProtocolX ());
+        respBody = ReadUniStringAsUTF8 (channel, NotTerminated);
+        status   = (int) response.GetStatusCode ();
+        conn.FinishReceive ();
+        conn.Close (false);
+        return true;
+    }
+    catch (GS::Exception& ex)   { errMsg = GS::UniString ("Network error: ") + ex.GetMessage (); }
+    catch (...)                 { errMsg = "Unknown error contacting the image service."; }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Extract concatenated text from candidates[0].content.parts[].text.
+// ---------------------------------------------------------------------------
+static bool ExtractText (const GS::UniString& responseJson, GS::UniString& outText, GS::UniString& errMsg)
+{
+    try {
+        JSON::JDOMStringParser parser;
+        JSON::ValueRef root = parser.Parse (responseJson);
+        if (!root || !root->IsObject ()) { errMsg = "Unexpected response from Gemini."; return false; }
+        const JSON::ObjectValue& rootObj = JSON::ObjectValue::Cast (*root);
+
+        if (rootObj.HasMember ("promptFeedback")) {
+            const JSON::ValueRef pf = rootObj.Get ("promptFeedback");
+            if (pf && pf->IsObject ()) {
+                const GS::UniString br = JsonGetString (JSON::ObjectValue::Cast (*pf), "blockReason");
+                if (!br.IsEmpty ()) { errMsg = GS::UniString ("Gemini blocked the request (") + br + ")."; return false; }
+            }
+        }
+        if (!rootObj.HasMember ("candidates")) { errMsg = "Gemini returned no candidates."; return false; }
+        const JSON::ValueRef candsVal = rootObj.Get ("candidates");
+        if (!candsVal || !candsVal->IsArray ()) { errMsg = "Gemini returned no candidates."; return false; }
+        const JSON::ArrayValue& cands = JSON::ArrayValue::Cast (*candsVal);
+        if (cands.GetSize () == 0) { errMsg = "Gemini returned no candidates."; return false; }
+        const JSON::ValueRef cand0 = cands.Get (0);
+        if (!cand0 || !cand0->IsObject ()) { errMsg = "Malformed candidate."; return false; }
+        const JSON::ObjectValue& cand0Obj = JSON::ObjectValue::Cast (*cand0);
+        if (!cand0Obj.HasMember ("content")) { errMsg = "Gemini returned no text."; return false; }
+        const JSON::ValueRef contentVal = cand0Obj.Get ("content");
+        if (!contentVal || !contentVal->IsObject ()) { errMsg = "Gemini returned no text."; return false; }
+        const JSON::ObjectValue& contentObj = JSON::ObjectValue::Cast (*contentVal);
+        if (!contentObj.HasMember ("parts")) { errMsg = "Gemini returned no text."; return false; }
+        const JSON::ValueRef partsVal = contentObj.Get ("parts");
+        if (!partsVal || !partsVal->IsArray ()) { errMsg = "Gemini returned no text."; return false; }
+        const JSON::ArrayValue& parts = JSON::ArrayValue::Cast (*partsVal);
+
+        GS::UniString text;
+        for (UIndex i = 0; i < parts.GetSize (); ++i) {
+            const JSON::ValueRef pv = parts.Get (i);
+            if (pv && pv->IsObject ())
+                text += JsonGetString (JSON::ObjectValue::Cast (*pv), "text");
+        }
+        text.Trim ();
+        if (text.IsEmpty ()) { errMsg = "Gemini returned no text."; return false; }
+        outText = text;
+        return true;
+    }
+    catch (...) { errMsg = "Could not parse the Gemini response."; return false; }
 }
 
 // ---------------------------------------------------------------------------
@@ -357,62 +415,96 @@ bool RenderImage (const GS::UniString& apiKey,
 
     body += "]}]}";
 
-    // The API key travels in a header, not the URL query string, so it does not
-    // leak into request logs / proxies.
-    GS::UniString path ("/v1beta/models/");
-    path += LoadModel ();
-    path += ":generateContent";
+    int           status   = 0;
+    GS::UniString respBody;
+    if (!GeminiPostJson (apiKey, LoadModel (), body, respBody, status, errMsg))
+        return false;
 
-    using namespace HTTP::Client;
-    using namespace HTTP::MessageHeader;
-    using namespace GS::IBinaryChannelUtilities;
-
-    try {
-        IO::URI::URI     connectionUrl (GS::UniString (kHost, CC_UTF8));
-        ClientConnection conn (connectionUrl);
-        conn.SetTimeout (120000);   // ms — image generation can take a while, but never hang forever
-        conn.Connect ();
-
-        Request request (Method::Id::Post, path);
-        RequestHeaderFieldCollection& headers = request.GetRequestHeaderFieldCollection ();
-        headers.Add (HeaderFieldName::ContentType, "application/json");
-        headers.Add (GS::UniString ("x-goog-api-key"), apiKey);
-        headers.Add (HeaderFieldName::UserAgent,   "arUtils-NanoBanana");
-
-        // The body is handed to Send directly (do NOT pre-write a content channel).
-        conn.Send (request, body.data (), static_cast<GS::USize> (body.size ()));
-        conn.FinishSend ();
-
-        Response response;
-        GS::IChannelX channel (conn.BeginReceive (response), GS::GetNetworkByteOrderIProtocolX ());
-        const GS::UniString respBody = ReadUniStringAsUTF8 (channel, NotTerminated);
-        const int status = (int) response.GetStatusCode ();
-        conn.FinishReceive ();
-        conn.Close (false);
-
-        if (status != 200) {
-            // Try to extract a useful message from an error body.
-            std::string ignore;
-            GS::UniString apiMsg;
-            if (ExtractImageData (respBody, ignore, apiMsg) == false && !apiMsg.IsEmpty ())
-                errMsg = FriendlyError (status, apiMsg);
-            else
-                errMsg = GS::UniString::Printf ("Image service returned HTTP %d.", status);
-            return false;
-        }
-
-        std::string outB64;
-        if (!ExtractImageData (respBody, outB64, errMsg))
-            return false;
-
-        outDataUrl = GS::UniString ("data:image/png;base64,");
-        outDataUrl += GS::UniString (outB64.c_str (), CC_UTF8);
-        return true;
+    if (status != 200) {
+        // Try to extract a useful message from an error body.
+        std::string ignore;
+        GS::UniString apiMsg;
+        if (ExtractImageData (respBody, ignore, apiMsg) == false && !apiMsg.IsEmpty ())
+            errMsg = FriendlyError (status, apiMsg);
+        else
+            errMsg = GS::UniString::Printf ("Image service returned HTTP %d.", status);
+        return false;
     }
-    catch (GS::Exception& ex)   { errMsg = GS::UniString ("Network error: ") + ex.GetMessage (); }
-    catch (...)                 { errMsg = "Unknown error contacting the image service."; }
 
-    return false;
+    std::string outB64;
+    if (!ExtractImageData (respBody, outB64, errMsg))
+        return false;
+
+    outDataUrl = GS::UniString ("data:image/png;base64,");
+    outDataUrl += GS::UniString (outB64.c_str (), CC_UTF8);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Text model used for prompt enhancement (E3) — separate from the image model,
+// so enhancing works regardless of the active render provider. Adjust here if a
+// newer fast text model becomes preferred.
+// ---------------------------------------------------------------------------
+static const char* kEnhanceModel = "gemini-2.5-flash";
+
+bool EnhancePromptText (const GS::UniString& apiKey,
+                        const GS::UniString& userPrompt,
+                        GS::UniString& outText,
+                        GS::UniString& errMsg)
+{
+    if (apiKey.IsEmpty ()) {
+        errMsg = "Prompt enhancement needs a Gemini API key. Set one in settings (⚙).";
+        return false;
+    }
+    GS::UniString brief = userPrompt;
+    brief.Trim ();
+    if (brief.IsEmpty ()) {
+        errMsg = "Type a brief prompt to enhance.";
+        return false;
+    }
+
+    static const char* kSystem =
+        "You rewrite a brief architectural rendering instruction into ONE detailed, "
+        "photorealistic architectural photography prompt. Focus on materials, lighting, "
+        "time of day, weather/atmosphere, and camera/lens. Never add, remove, or move "
+        "building geometry. Keep it under 80 words. Output ONLY the rewritten prompt text "
+        "- no preamble, quotes, labels, or explanation.";
+
+    std::string body;
+    body.reserve (1024);
+    body += "{\"systemInstruction\":{\"parts\":[{\"text\":\"";
+    body += JsonEscape (GS::UniString (kSystem, CC_UTF8));
+    body += "\"}]},\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"";
+    body += JsonEscape (brief);
+    body += "\"}]}],\"generationConfig\":{\"temperature\":0.7}}";
+
+    int           status   = 0;
+    GS::UniString respBody;
+    if (!GeminiPostJson (apiKey, GS::UniString (kEnhanceModel, CC_UTF8), body, respBody, status, errMsg))
+        return false;
+
+    if (status != 200) {
+        // Pull error.message from the Gemini error body when present.
+        GS::UniString apiMsg;
+        try {
+            JSON::JDOMStringParser parser;
+            JSON::ValueRef root = parser.Parse (respBody);
+            if (root && root->IsObject ()) {
+                const JSON::ObjectValue& o = JSON::ObjectValue::Cast (*root);
+                if (o.HasMember ("error")) {
+                    const JSON::ValueRef ev = o.Get ("error");
+                    if (ev && ev->IsObject ())
+                        apiMsg = JsonGetString (JSON::ObjectValue::Cast (*ev), "message");
+                }
+            }
+        } catch (...) { /* fall through to generic message */ }
+        errMsg = apiMsg.IsEmpty ()
+            ? GS::UniString::Printf ("Prompt enhancement failed (HTTP %d).", status)
+            : FriendlyError (status, apiMsg);
+        return false;
+    }
+
+    return ExtractText (respBody, outText, errMsg);
 }
 
 } // namespace NanoBanana

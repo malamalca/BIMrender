@@ -15,7 +15,7 @@ namespace NanoBanana {
 //   v5: v4 + localUrl   (self-hosted SD WebUI / Forge)
 static const Int32  kPrefsVersion = 5;
 
-static const char*  kDefaultModel     = "gemini-3.1-flash-image";
+static const char*  kDefaultModel     = "gemini-3.1-flash-lite-image";
 static const char*  kDefaultFluxUrl   = "https://api.bfl.ai";
 static const char*  kDefaultFluxModel = "flux-kontext-pro";
 static const char*  kDefaultLocalUrl  = "http://127.0.0.1:7860";
@@ -276,6 +276,16 @@ void SaveSettings (Provider provider,
     std::strncpy (p.fluxUrl,     fUrl.ToCStr (0, MaxUSize, CC_UTF8).Get (), sizeof (p.fluxUrl) - 1);
     std::strncpy (p.fluxModel,   fMdl.ToCStr (0, MaxUSize, CC_UTF8).Get (), sizeof (p.fluxModel) - 1);
     std::strncpy (p.localUrl,    lUrl.ToCStr (0, MaxUSize, CC_UTF8).Get (), sizeof (p.localUrl) - 1);
+
+    // Guarantee termination explicitly rather than relying on the memset above,
+    // so a truncated copy can never leave an unterminated buffer.
+    p.geminiKey[sizeof (p.geminiKey) - 1]     = '\0';
+    p.geminiModel[sizeof (p.geminiModel) - 1] = '\0';
+    p.provider[sizeof (p.provider) - 1]       = '\0';
+    p.fluxKey[sizeof (p.fluxKey) - 1]         = '\0';
+    p.fluxUrl[sizeof (p.fluxUrl) - 1]         = '\0';
+    p.fluxModel[sizeof (p.fluxModel) - 1]     = '\0';
+    p.localUrl[sizeof (p.localUrl) - 1]       = '\0';
 
     PutPrefs (p);
 }

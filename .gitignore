@@ -3,3 +3,5 @@ Build/*
 .vscode
 out/*
 CMakeUserPresets.json
+.pi/*
+.claude/*

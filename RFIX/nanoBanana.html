@@ -193,6 +193,54 @@
         background: var(--accent); color: #1a1a1a;
         border-color: var(--accent); font-weight: 600;
     }
+
+    /* --- provider badge (B6) --- */
+    #providerBadge {
+        display: flex; align-items: center; flex-shrink: 0;
+        font-size: 11px; padding: 0 9px; border-radius: 6px;
+        background: var(--panel); border: 1px solid var(--border);
+        color: var(--muted); white-space: nowrap; user-select: none;
+        align-self: stretch;
+    }
+    #providerBadge .dot {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: var(--accent); margin-right: 6px; flex-shrink: 0;
+    }
+
+    /* --- prompt tools: enhance / templates / history (E1, E2, E3) --- */
+    #promptTools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    #promptTools button { padding: 5px 10px; font-size: 12px; }
+    #promptTools button.active { border-color: var(--accent); color: var(--accent-hi); }
+    .tool-panel {
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 8px; padding: 8px; gap: 6px;
+        display: flex; align-items: center; flex-wrap: wrap;
+    }
+    .tool-panel.collapsed { display: none; }
+    .tool-panel select {
+        font: inherit; font-size: 12px; color: var(--text);
+        background: var(--stage); border: 1px solid var(--border);
+        border-radius: 6px; padding: 5px 6px; flex: 1; min-width: 108px;
+    }
+    .tool-panel select:focus { outline: none; border-color: var(--accent); }
+    #histList {
+        display: flex; flex-direction: column; gap: 4px;
+        width: 100%; max-height: 132px; overflow-y: auto;
+    }
+    .hist-item {
+        text-align: left; width: 100%;
+        background: var(--stage); border: 1px solid var(--border);
+        border-radius: 6px; padding: 6px 8px; font-size: 12px; color: var(--text);
+        cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .hist-item:hover { border-color: var(--accent); }
+    #histEmpty { color: var(--muted); font-size: 12px; padding: 4px 2px; }
+    .btn-spinner-dark {
+        display: inline-block; width: 12px; height: 12px;
+        border: 2px solid rgba(255,255,255,.25); border-top-color: var(--accent);
+        border-radius: 50%; animation: spin .7s linear infinite;
+        vertical-align: middle; margin-right: 6px;
+    }
 </style>
 </head>
 <body>
@@ -201,6 +249,7 @@
     <div id="topbar">
         <button id="captureBtn" disabled>📷 Capture Current 3D</button>
         <button id="markBtn" title="Mark a region of the image to edit" disabled>▱ Mark region</button>
+        <span id="providerBadge" title="Active AI provider"><span class="dot"></span>…</span>
         <button id="settingsBtn" title="API key settings">⚙</button>
     </div>
 
@@ -227,6 +276,56 @@
         <div id="refThumbs"></div>
         <button id="addRefBtn" title="Add attachment image (max 5)">＋ Add</button>
         <input type="file" id="refFileInput" multiple accept="image/png,image/jpeg,image/webp" style="display:none">
+    </div>
+
+    <div id="promptTools">
+        <button id="enhanceBtn" title="Expand your prompt into a detailed one using Gemini">✨ Enhance</button>
+        <button id="tmplToggle" title="Build a prompt from presets">🎛 Templates</button>
+        <button id="histToggle" title="Reuse a previous prompt">🕘 History</button>
+    </div>
+
+    <div id="tmplPanel" class="tool-panel collapsed">
+        <select id="tmplStyle" title="Architectural style">
+            <option value="">Style…</option>
+            <option value="modernist architecture">Modernist</option>
+            <option value="brutalist concrete architecture">Brutalist</option>
+            <option value="Mediterranean architecture">Mediterranean</option>
+            <option value="Scandinavian architecture">Scandinavian</option>
+            <option value="industrial-style architecture">Industrial</option>
+            <option value="minimalist architecture">Minimalist</option>
+            <option value="traditional architecture">Traditional</option>
+        </select>
+        <select id="tmplTime" title="Time of day / lighting">
+            <option value="">Time…</option>
+            <option value="golden-hour lighting">Golden hour</option>
+            <option value="blue-hour twilight">Blue hour</option>
+            <option value="bright clear midday sun">Midday clear</option>
+            <option value="soft overcast daylight">Midday overcast</option>
+            <option value="night exterior with warm artificial lighting">Night exterior</option>
+            <option value="cozy interior night lighting">Night interior</option>
+        </select>
+        <select id="tmplWeather" title="Weather / atmosphere">
+            <option value="">Weather…</option>
+            <option value="clear sky">Clear</option>
+            <option value="light fog">Light fog</option>
+            <option value="light snowfall">Light snow</option>
+            <option value="rain with wet reflective surfaces">Rain, wet surfaces</option>
+            <option value="dramatic cloudy sky">Dramatic clouds</option>
+        </select>
+        <select id="tmplCamera" title="Camera / lens">
+            <option value="">Camera…</option>
+            <option value="wide-angle 16mm lens">Wide 16mm</option>
+            <option value="standard 35mm lens">Standard 35mm</option>
+            <option value="85mm telephoto lens">Telephoto 85mm</option>
+            <option value="aerial drone view">Drone aerial</option>
+            <option value="eye-level perspective">Eye-level</option>
+        </select>
+        <button id="tmplApply" class="primary" title="Append the preset to your prompt">Insert</button>
+    </div>
+
+    <div id="histPanel" class="tool-panel collapsed">
+        <div id="histList"></div>
+        <button id="histClear" title="Remove all saved prompts">Clear history</button>
     </div>
 
     <textarea id="prompt" placeholder="Describe how the AI should transform the image, e.g. &quot;photorealistic dusk lighting&quot;"></textarea>
@@ -309,7 +408,7 @@
             }
         });
     }
-    setInterval(refreshThreeD, 1000);
+    setInterval(function () { refreshThreeD(); refreshProvider(); }, 1000);
 
     // ---- compare slider ----------------------------------------------
     function applySlider() {
@@ -428,7 +527,7 @@
 
     // ---- settings -----------------------------------------------------
     settingsBtn.addEventListener('click', function () {
-        ARUTILS.OpenSettings().then(function () { /* key (maybe) updated */ });
+        ARUTILS.OpenSettings().then(function () { refreshProvider(); });
     });
 
     // ---- region marquee (mark an area to edit) ------------------------
@@ -645,6 +744,7 @@
                     }
                     clearRegion();                     // the edit consumed the marked region
                     promptHistory.push(prompt);        // record the (clean) prompt for future context
+                    addUsedPrompt(prompt);             // persistent reuse list (E2)
                     history.push(result);              // record this step for undo
                     if (history.length > maxHistory)   // bound memory; keep history[0] (the capture)
                         history.splice(1, 1);
@@ -674,6 +774,7 @@
             if (has) { doRender(); return; }
             // No key yet: open settings, then render if the user added one.
             ARUTILS.OpenSettings().then(function (nowHas) {
+                refreshProvider();
                 if (nowHas) doRender();
                 else {
                     setStatus("An API key is required to render.", true);
@@ -790,6 +891,162 @@
         });
     });
 
+    // ---- provider badge (B6) ------------------------------------------
+    var providerBadge = document.getElementById('providerBadge');
+    function providerLabel(p) {
+        if (p === 'flux')  return 'Flux';
+        if (p === 'local') return 'Local';
+        return 'Gemini';
+    }
+    function refreshProvider() {
+        if (!window.ARUTILS || !ARUTILS.GetProvider) return;
+        ARUTILS.GetProvider().then(function (p) {
+            var label = providerLabel(p);
+            providerBadge.innerHTML = '<span class="dot"></span>' + label;
+            providerBadge.title = 'Active AI provider: ' + label + ' — change in ⚙';
+        });
+    }
+
+    // ---- collapsible prompt-tool panels (shared) ----------------------
+    var tmplToggle = document.getElementById('tmplToggle');
+    var tmplPanel  = document.getElementById('tmplPanel');
+    var tmplApply  = document.getElementById('tmplApply');
+    var tmplStyle  = document.getElementById('tmplStyle');
+    var tmplTime   = document.getElementById('tmplTime');
+    var tmplWeather= document.getElementById('tmplWeather');
+    var tmplCamera = document.getElementById('tmplCamera');
+    var histToggle = document.getElementById('histToggle');
+    var histPanel  = document.getElementById('histPanel');
+    var histList   = document.getElementById('histList');
+    var histClear  = document.getElementById('histClear');
+    var enhanceBtn = document.getElementById('enhanceBtn');
+
+    // Open `panel`, closing the sibling so only one is visible at a time.
+    function openExclusive(panel, btn, otherPanel, otherBtn) {
+        var show = panel.classList.contains('collapsed');
+        otherPanel.classList.add('collapsed');
+        otherBtn.classList.remove('active');
+        panel.classList.toggle('collapsed', !show);
+        btn.classList.toggle('active', show);
+        return show;
+    }
+
+    // ---- E1: smart prompt templates -----------------------------------
+    // Compose a prompt fragment from the chosen presets. Selecting nothing still
+    // yields a sensible photorealistic base. The result is *appended* to the
+    // textarea, so any custom free text the user typed is preserved and editable.
+    function buildTemplate() {
+        var parts = [];
+        var lead = "Photorealistic architectural photography";
+        if (tmplStyle.value) lead += " of " + tmplStyle.value;
+        parts.push(lead);
+        if (tmplTime.value)    parts.push(tmplTime.value);
+        if (tmplWeather.value) parts.push(tmplWeather.value);
+        if (tmplCamera.value)  parts.push(tmplCamera.value);
+        return parts.join(", ") + ". Keep all architectural geometry exactly as in the input image.";
+    }
+    tmplToggle.addEventListener('click', function () {
+        openExclusive(tmplPanel, tmplToggle, histPanel, histToggle);
+    });
+    tmplApply.addEventListener('click', function () {
+        var frag = buildTemplate();
+        var cur = promptEl.value.trim();
+        promptEl.value = cur ? (cur + " " + frag) : frag;
+        promptEl.focus();
+        setStatus("Template inserted — edit freely, then press Send.");
+    });
+
+    // ---- E2: prompt history (persistent reuse list) -------------------
+    // Distinct from `promptHistory` (the AI-context list cleared on undo/reset):
+    // this survives reset/undo and, when storage is available, across sessions.
+    var usedPrompts = [];
+    var HIST_KEY = 'bimrender.promptHistory';
+    var HIST_MAX = 20;
+    function loadUsedPrompts() {
+        try {
+            var raw = window.localStorage ? localStorage.getItem(HIST_KEY) : null;
+            if (raw) usedPrompts = JSON.parse(raw) || [];
+        } catch (e) { usedPrompts = []; }
+    }
+    function saveUsedPrompts() {
+        try { if (window.localStorage) localStorage.setItem(HIST_KEY, JSON.stringify(usedPrompts)); }
+        catch (e) { /* storage unavailable in this host -> session-only */ }
+    }
+    function addUsedPrompt(text) {
+        text = (text || "").trim();
+        if (!text) return;
+        usedPrompts = usedPrompts.filter(function (p) { return p !== text; });
+        usedPrompts.unshift(text);
+        if (usedPrompts.length > HIST_MAX) usedPrompts.length = HIST_MAX;
+        saveUsedPrompts();
+        if (!histPanel.classList.contains('collapsed')) renderHistList();
+    }
+    function renderHistList() {
+        histList.innerHTML = '';
+        if (usedPrompts.length === 0) {
+            var empty = document.createElement('div');
+            empty.id = 'histEmpty';
+            empty.textContent = 'No prompts yet — your sent prompts will appear here.';
+            histList.appendChild(empty);
+            return;
+        }
+        usedPrompts.forEach(function (text) {
+            var item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'hist-item';
+            item.textContent = text;
+            item.title = text;
+            item.addEventListener('click', function () {
+                promptEl.value = text;
+                promptEl.focus();
+                openExclusive(histPanel, histToggle, tmplPanel, tmplToggle); // close after pick
+                setStatus("Prompt loaded from history.");
+            });
+            histList.appendChild(item);
+        });
+    }
+    histToggle.addEventListener('click', function () {
+        if (openExclusive(histPanel, histToggle, tmplPanel, tmplToggle)) renderHistList();
+    });
+    histClear.addEventListener('click', function () {
+        usedPrompts = [];
+        saveUsedPrompts();
+        renderHistList();
+        setStatus("Prompt history cleared.");
+    });
+
+    // ---- E3: enhance prompt via Gemini text ---------------------------
+    var enhancing = false;
+    enhanceBtn.addEventListener('click', function () {
+        if (enhancing) return;
+        if (!window.ARUTILS || !ARUTILS.EnhancePrompt) { setStatus("Enhance is unavailable.", true); return; }
+        var text = promptEl.value.trim();
+        if (!text) { setStatus("Type a brief prompt to enhance.", true); promptEl.focus(); return; }
+
+        enhancing = true;
+        enhanceBtn.disabled = true;
+        var oldHtml = enhanceBtn.innerHTML;
+        enhanceBtn.innerHTML = '<span class="btn-spinner-dark"></span>Enhancing…';
+        setStatus("Enhancing prompt with Gemini…");
+
+        function restore() { enhancing = false; enhanceBtn.disabled = false; enhanceBtn.innerHTML = oldHtml; }
+        ARUTILS.EnhancePrompt(text).then(function (result) {
+            restore();
+            if (typeof result === "string" && result.indexOf("ERROR:") === 0) {
+                setStatus(result.substring(6).trim(), true);
+                return;
+            }
+            promptEl.value = (result || "").trim();
+            promptEl.focus();
+            setStatus("Prompt enhanced — review it, then press Send.");
+        }).catch(function (err) {
+            restore();
+            setStatus("Enhance failed: " + (err && err.message ? err.message : err), true);
+        });
+    });
+
+    loadUsedPrompts();
+    refreshProvider();
     refreshThreeD();
 })();
 </script>

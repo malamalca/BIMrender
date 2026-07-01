@@ -5,6 +5,7 @@
 
 #include "NanoBanana/WebUIClient.hpp"
 #include "NanoBanana/Base64.hpp"
+#include "NanoBanana/JsonUtils.hpp"
 
 #include "HTTP/Client/ClientConnection.hpp"
 #include "IBinaryChannelUtilities.hpp"
@@ -20,50 +21,8 @@ namespace NanoBanana {
 // "preserve the input"; ~0.6 keeps the architecture recognisable while still
 // letting the prompt change materials / lighting.
 static const double kDenoisingStrength = 0.6;
-static const int    kSteps             = 30;
-
-// ---------------------------------------------------------------------------
-// Minimal JSON string escaping for the prompt text.
-// ---------------------------------------------------------------------------
-static std::string JsonEscape (const GS::UniString& s)
-{
-    const std::string in (s.ToCStr (0, MaxUSize, CC_UTF8).Get ());
-    std::string out;
-    out.reserve (in.size () + 16);
-    for (char c : in) {
-        switch (c) {
-            case '\"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char> (c) < 0x20) {
-                    char buf[8];
-                    snprintf (buf, sizeof (buf), "\\u%04x", c & 0xFF);
-                    out += buf;
-                } else {
-                    out += c;
-                }
-        }
-    }
-    return out;
-}
-
-// ---------------------------------------------------------------------------
-// Split a "data:<mime>;base64,<payload>" URL into its raw base64 payload.
-// Falls back to treating the whole string as raw base64.
-// ---------------------------------------------------------------------------
-static std::string DataUrlPayload (const GS::UniString& dataUrl)
-{
-    const std::string s (dataUrl.ToCStr (0, MaxUSize, CC_UTF8).Get ());
-    if (s.compare (0, 5, "data:") == 0) {
-        const size_t comma = s.find (',');
-        if (comma != std::string::npos)
-            return s.substr (comma + 1);
-    }
-    return s;
-}
+static const int    kSteps             = 4;
+static const double kCfgScale          = 1.0;
 
 // ---------------------------------------------------------------------------
 // Read the pixel dimensions from a decoded PNG (IHDR width/height, big-endian).
@@ -80,19 +39,6 @@ static bool PngDimensions (const std::string& png, int& width, int& height)
     width  = (p[16] << 24) | (p[17] << 16) | (p[18] << 8) | p[19];
     height = (p[20] << 24) | (p[21] << 16) | (p[22] << 8) | p[23];
     return width > 0 && height > 0;
-}
-
-// ---------------------------------------------------------------------------
-// Read a string member from a JSON object (empty when absent / not a string).
-// ---------------------------------------------------------------------------
-static GS::UniString JGetStr (const JSON::ObjectValue& obj, const char* key)
-{
-    if (!obj.HasMember (key))
-        return GS::EmptyUniString;
-    const JSON::ValueRef v = obj.Get (key);
-    if (v && v->IsString ())
-        return JSON::StringValue::Cast (*v).Get ();
-    return GS::EmptyUniString;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,18 +149,28 @@ bool WebUIRenderImage (const GS::UniString& baseUrl,
         turnText += "\n[Current instruction]\n";
     }
     turnText += prompt;
-    // When inpainting we only touch the masked area, so "keep the geometry"
-    // would fight edits like "put a sofa here"; keep just the realism cues.
-    turnText += inpaint ? ", photorealistic, sharp, high detail"
-                        : ", photorealistic, keep the original architectural geometry, sharp, high detail";
+    /*turnText += " CRITICAL QUALITY RULES: The output must be a photorealistic image indistinguishable from a real photograph — not a 3D render, illustration, or CGI. "
+                "Apply realistic materials with correct reflectance, roughness, and texture. "
+                "Use physically accurate lighting with natural shadows, ambient occlusion, and global illumination. "
+                "Add photographic post-processing: natural colour grading and realistic exposure. "
+                "Do not include wireframes, flat colours, or any visual cue that reveals a digital origin. "
+                "Maintain maximum sharpness and detail throughout the entire image.";*/
 
     // For inpainting the masked area should change more than a whole-image pass.
-    const double denoising = inpaint ? 0.75 : kDenoisingStrength;
+    const double denoising = inpaint ? 0.6 : kDenoisingStrength;
 
     // Preserve the input resolution when we can read it from the PNG header;
     // otherwise WebUI would fall back to its 512x512 default and downscale.
     int w = 0, h = 0;
     const bool haveDims = PngDimensions (Base64Decode (b64), w, h);
+    // FLUX and SDXL patch embeddings require both dimensions to be multiples of
+    // 16 (8x spatial downsampling × 2x patch size).  Round up so odd-sized 3D
+    // window captures don't produce an EinopsError inside the model.
+    if (haveDims) {
+        const int align = 16;
+        w = ((w + align - 1) / align) * align;
+        h = ((h + align - 1) / align) * align;
+    }
 
     std::string body;
     body.reserve (b64.size () + maskB64.size () + 1024);
@@ -230,6 +186,14 @@ bool WebUIRenderImage (const GS::UniString& baseUrl,
     }
     body += ",\"steps\":";
     body += std::to_string (kSteps);
+    {
+        char num[32];
+        snprintf (num, sizeof (num), "%.3f", kCfgScale);
+        body += ",\"cfg_scale\":";
+        body += num;
+    }
+    body += ",\"sampler_name\":\"Euler\",\"scheduler\":\"Beta\""
+            ",\"beta_dist_alpha\":0.6,\"beta_dist_beta\":0.6";
     if (haveDims) {
         body += ",\"width\":";  body += std::to_string (w);
         body += ",\"height\":"; body += std::to_string (h);
@@ -282,7 +246,7 @@ bool WebUIRenderImage (const GS::UniString& baseUrl,
             }
             // Surface an error/detail message if there was no image.
             if (imgB64.IsEmpty () && o.HasMember ("detail"))
-                errMsg = GS::UniString ("Local server: ") + JGetStr (o, "detail");
+                errMsg = GS::UniString ("Local server: ") + JsonGetString (o, "detail");
         }
     } catch (...) {
         errMsg = "Could not parse the local server response.";

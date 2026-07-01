@@ -7,8 +7,9 @@
 
 namespace NanoBanana {
 
-// Sends an image + instruction prompt to Google's gemini-2.5-flash-image
-// ("Nano Banana") model and returns the produced image.
+// Sends an image + instruction prompt to Google's Gemini image model
+// ("Nano Banana"; the exact model id is configurable in Settings) and returns
+// the produced image.
 //
 //   apiKey          - Google Generative Language API key.
 //   prompt          - free-text editing instruction.
@@ -33,6 +34,14 @@ bool RenderImage (const GS::UniString& apiKey,
                   const GS::UniString& promptHistory,
                   GS::UniString& outDataUrl,
                   GS::UniString& errMsg);
+
+// Expands a brief instruction into a single detailed architectural-photography
+// prompt using a Gemini text model. Independent of the active render provider,
+// but needs a Gemini API key. Returns true and fills outText on success.
+bool EnhancePromptText (const GS::UniString& apiKey,
+                        const GS::UniString& userPrompt,
+                        GS::UniString& outText,
+                        GS::UniString& errMsg);
 
 } // namespace NanoBanana
 

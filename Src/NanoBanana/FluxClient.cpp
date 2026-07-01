@@ -7,6 +7,7 @@
 
 #include "NanoBanana/FluxClient.hpp"
 #include "NanoBanana/Base64.hpp"
+#include "NanoBanana/JsonUtils.hpp"
 
 #include "HTTP/Client/ClientConnection.hpp"
 #include "IBinaryChannelUtilities.hpp"
@@ -21,62 +22,6 @@ namespace NanoBanana {
 // Poll the task at most this long before giving up (image edits take seconds).
 static const int    kMaxPollSeconds  = 120;
 static const int    kPollIntervalMs  = 1500;
-
-// ---------------------------------------------------------------------------
-// Minimal JSON string escaping for the prompt text.
-// ---------------------------------------------------------------------------
-static std::string JsonEscape (const GS::UniString& s)
-{
-    const std::string in (s.ToCStr (0, MaxUSize, CC_UTF8).Get ());
-    std::string out;
-    out.reserve (in.size () + 16);
-    for (char c : in) {
-        switch (c) {
-            case '\"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char> (c) < 0x20) {
-                    char buf[8];
-                    snprintf (buf, sizeof (buf), "\\u%04x", c & 0xFF);
-                    out += buf;
-                } else {
-                    out += c;
-                }
-        }
-    }
-    return out;
-}
-
-// ---------------------------------------------------------------------------
-// Split a "data:<mime>;base64,<payload>" URL into its raw base64 payload.
-// Falls back to treating the whole string as raw base64.
-// ---------------------------------------------------------------------------
-static std::string DataUrlPayload (const GS::UniString& dataUrl)
-{
-    const std::string s (dataUrl.ToCStr (0, MaxUSize, CC_UTF8).Get ());
-    if (s.compare (0, 5, "data:") == 0) {
-        const size_t comma = s.find (',');
-        if (comma != std::string::npos)
-            return s.substr (comma + 1);
-    }
-    return s;
-}
-
-// ---------------------------------------------------------------------------
-// Read a string member from a JSON object (empty when absent / not a string).
-// ---------------------------------------------------------------------------
-static GS::UniString JGetStr (const JSON::ObjectValue& obj, const char* key)
-{
-    if (!obj.HasMember (key))
-        return GS::EmptyUniString;
-    const JSON::ValueRef v = obj.Get (key);
-    if (v && v->IsString ())
-        return JSON::StringValue::Cast (*v).Get ();
-    return GS::EmptyUniString;
-}
 
 // ---------------------------------------------------------------------------
 // One HTTP exchange.  Reads the whole response body as raw bytes (works for
@@ -229,8 +174,8 @@ bool FluxRenderImage (const GS::UniString& apiKey,
         JSON::ValueRef root = parser.Parse (GS::UniString (resp.c_str (), CC_UTF8));
         if (root && root->IsObject ()) {
             const JSON::ObjectValue& o = JSON::ObjectValue::Cast (*root);
-            taskId     = JGetStr (o, "id");
-            pollingUrl = JGetStr (o, "polling_url");
+            taskId     = JsonGetString (o, "id");
+            pollingUrl = JsonGetString (o, "polling_url");
         }
     } catch (...) { /* fall through to status check */ }
 
@@ -274,11 +219,11 @@ bool FluxRenderImage (const GS::UniString& apiKey,
             JSON::ValueRef root = parser.Parse (GS::UniString (resp.c_str (), CC_UTF8));
             if (root && root->IsObject ()) {
                 const JSON::ObjectValue& o = JSON::ObjectValue::Cast (*root);
-                taskStatus = JGetStr (o, "status");
+                taskStatus = JsonGetString (o, "status");
                 if (o.HasMember ("result")) {
                     const JSON::ValueRef rv = o.Get ("result");
                     if (rv && rv->IsObject ())
-                        sampleUrl = JGetStr (JSON::ObjectValue::Cast (*rv), "sample");
+                        sampleUrl = JsonGetString (JSON::ObjectValue::Cast (*rv), "sample");
                 }
             }
         } catch (...) { continue; }

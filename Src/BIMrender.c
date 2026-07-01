@@ -74,8 +74,12 @@ GSErrCode MenuCommandHandler (const API_MenuParams *menuParams)
 // -----------------------------------------------------------------------------
 API_AddonType CheckEnvironment (API_EnvirParams* envir)
 {
-	RSGetIndString (&envir->addOnInfo.name, ID_ADDON_INFO, 1, ACAPI_GetOwnResModule());
-	RSGetIndString (&envir->addOnInfo.description, ID_ADDON_INFO, 2, ACAPI_GetOwnResModule());
+	// Fall back to literals if the resource strings can't be loaded, so the
+	// add-on never reports an empty name/description to Archicad.
+	if (!RSGetIndString (&envir->addOnInfo.name, ID_ADDON_INFO, 1, ACAPI_GetOwnResModule ()))
+		envir->addOnInfo.name = "BIMrender";
+	if (!RSGetIndString (&envir->addOnInfo.description, ID_ADDON_INFO, 2, ACAPI_GetOwnResModule ()))
+		envir->addOnInfo.description = "AI rendering add-on for Archicad (NanoBanana).";
 
 	return APIAddon_Normal;
 } // CheckEnvironment

@@ -242,6 +242,15 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
         return new JS::Value (SaveDataUrlToFile (GetStringParam (params)));
     }));
 
+    // Expand a brief prompt into a detailed one via a Gemini text model.
+    // Uses the Gemini key regardless of the active provider -> new prompt, or "ERROR: <msg>"
+    jsACAPI->AddItem (new JS::Function ("EnhancePrompt", [] (GS::Ref<JS::Base> params) -> GS::Ref<JS::Base> {
+        GS::UniString outText, errMsg;
+        if (NanoBanana::EnhancePromptText (NanoBanana::LoadApiKey (), GetStringParam (params), outText, errMsg))
+            return new JS::Value (outText);
+        return new JS::Value (GS::UniString ("ERROR: ") + errMsg);
+    }));
+
     browser.RegisterAsynchJSObject (jsACAPI);
 }
 
