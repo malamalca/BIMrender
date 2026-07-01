@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-01
+
 ### Added
 - Prompt enhancement: a "✨ Enhance" button expands a brief instruction into a
   detailed photorealistic prompt via a Gemini text model
@@ -54,5 +56,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (Black Forest Labs), and a local Stable Diffusion WebUI/Forge backend.
 - Prebuilt releases for Archicad 27 and Archicad 28.
 
-[Unreleased]: https://github.com/malamalca/BIMrender/compare/d4ce141...HEAD
+[Unreleased]: https://github.com/malamalca/BIMrender/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/malamalca/BIMrender/compare/d4ce141...v1.0.1
 [1.0.0]: https://github.com/malamalca/BIMrender/commits/d4ce141
