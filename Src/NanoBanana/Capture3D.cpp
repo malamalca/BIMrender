@@ -53,8 +53,11 @@ static bool ReadFileBytes (const IO::Location& loc, std::string& out)
 // ---------------------------------------------------------------------------
 // Capture the current 3D view -> temp PNG -> base64 data URL.
 // ---------------------------------------------------------------------------
-GS::UniString CaptureCurrent3DAsDataUrl ()
+GS::UniString CaptureCurrent3DAsDataUrl (GSErrCode* saveErrOut)
 {
+    if (saveErrOut != nullptr)
+        *saveErrOut = NoError;
+
     if (!Is3DWindowActive ())
         return GS::UniString ();
 
@@ -85,8 +88,11 @@ GS::UniString CaptureCurrent3DAsDataUrl ()
     pars.keepSelectionHighlight = false;
 
     const GSErrCode err = ACAPI_ProjectOperation_Save (&fsp, &pars);
-    if (err != NoError)
+    if (err != NoError) {
+        if (saveErrOut != nullptr)
+            *saveErrOut = err;
         return GS::UniString ();
+    }
 
     std::string pngBytes;
     const bool readOk = ReadFileBytes (outFile, pngBytes);
@@ -101,6 +107,65 @@ GS::UniString CaptureCurrent3DAsDataUrl ()
     GS::UniString dataUrl ("data:image/png;base64,");
     dataUrl += GS::UniString (b64.c_str (), CC_UTF8);
     return dataUrl;
+}
+
+// ---------------------------------------------------------------------------
+// Asynchronous capture via a module command (see Capture3D.hpp).
+// All of this runs on the main thread: StartAsyncCapture / FetchCaptureResult
+// are called from the JS bridge (main thread on macOS, marshalled there by
+// RunOnMainThread otherwise) and CaptureCommandHandler from the event loop.
+// ---------------------------------------------------------------------------
+static GS::UniString captureResult;
+static bool          capturePending = false;
+
+bool StartAsyncCapture ()
+{
+    if (capturePending)
+        return true;                       // a capture is already in flight
+
+    capturePending = true;
+    captureResult.Clear ();
+
+    API_ModulID mdid = {};                 // our own 'MDID' resource values
+    mdid.developerID = 1211329892;
+    mdid.localID     = 439119418;
+
+    const GSErrCode err = ACAPI_AddOnAddOnCommunication_CallFromEventLoop (
+        &mdid, CaptureCmdID, CaptureCmdVersion, nullptr, false, nullptr);
+
+    if (err != NoError) {
+        capturePending = false;
+        return false;
+    }
+    return true;
+}
+
+GS::UniString FetchCaptureResult ()
+{
+    if (capturePending)
+        return GS::UniString ("PENDING");
+
+    GS::UniString result = captureResult;
+    captureResult.Clear ();                // one-shot
+    return result;
+}
+
+GSErrCode CaptureCommandHandler (GSHandle /*params*/, GSPtr /*resultData*/, bool /*silentMode*/)
+{
+    GSErrCode saveErr = NoError;
+    captureResult = CaptureCurrent3DAsDataUrl (&saveErr);
+    if (captureResult.IsEmpty ()) {
+        // APIERR_REFUSEDCMD from the picture export in a clean command context
+        // means Archicad itself refuses to save — the documented case is the
+        // Demo version, which cannot save anything.
+        if (saveErr == APIERR_REFUSEDCMD)
+            captureResult = "ERROR: Archicad refused to export the view. "
+                            "The Demo version cannot save; a full license is required.";
+        else
+            captureResult = "ERROR: Could not capture. Make sure the 3D window is active.";
+    }
+    capturePending = false;
+    return NoError;
 }
 
 } // namespace NanoBanana

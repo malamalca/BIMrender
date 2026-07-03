@@ -86,6 +86,11 @@
       "configuration": "Debug"
     },
     {
+      "name": "ac29-mac",
+      "configurePreset": "ac29-INT-MAC",
+      "configuration": "Release"
+    },
+    {
       "name": "ac29-INT",
       "configurePreset": "ac29-INT",
       "configuration": "Release"

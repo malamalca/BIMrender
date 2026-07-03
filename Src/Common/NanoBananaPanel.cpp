@@ -24,7 +24,11 @@
 #include <DGFileDialog.hpp>
 #include <Location.hpp>
 #include <File.hpp>
+#include <MessageLoopExecutor.hpp>
+#include <FunctionRunnable.hpp>
+#include <functional>
 #include <string>
+#include <thread>
 
 // ---------------------------------------------------------------------------
 // Load the embedded HTML page from the 'DATA' resource.
@@ -166,43 +170,102 @@ NanoBananaPanel::~NanoBananaPanel ()
 // ---------------------------------------------------------------------------
 void NanoBananaPanel::InitBrowserControl ()
 {
-    browser.LoadHTML (LoadHtmlFromResource ());
+    // Register the JS bridge BEFORE loading the page. On macOS (WKWebView) the
+    // browser injects registered JS objects into the page at load time, so a
+    // registration that happens after LoadHTML never reaches the document and
+    // window.ARUTILS stays undefined (leaving the Capture button permanently
+    // disabled). On Windows (WebView2) the order is not significant, but doing
+    // it first is correct on both platforms.
     RegisterJavaScriptObject ();
+    browser.LoadHTML (LoadHtmlFromResource ());
+}
+
+// ---------------------------------------------------------------------------
+// ACAPI and DG calls are only valid on the main (message-loop) thread, but
+// which thread the browser delivers JS callbacks on is a CEF implementation
+// detail (observed: main thread on macOS, worker thread on Windows). Every
+// handler below therefore marshals its Archicad-touching work through
+// RunOnMainThread, which is a plain inline call when already on the main
+// thread. The long-running network calls stay on the calling thread so the
+// UI keeps responding while a render is in flight.
+// ---------------------------------------------------------------------------
+static std::thread::id mainThreadId;
+
+static void RunOnMainThread (const std::function<void ()>& fn)
+{
+    if (std::this_thread::get_id () == mainThreadId) {
+        fn ();
+        return;
+    }
+    GS::MessageLoopExecutor ().ExecuteAndWait (GS::RunnableTask (new GS::FunctionRunnable (fn)));
 }
 
 void NanoBananaPanel::RegisterJavaScriptObject ()
 {
+    mainThreadId = std::this_thread::get_id ();   // registration runs on the main thread
+
     JS::Object* jsACAPI = new JS::Object ("ARUTILS");
 
-    // Is the 3D window currently active?  -> bool
-    jsACAPI->AddItem (new JS::Function ("Is3DActive", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
-        return new JS::Value (NanoBanana::Is3DWindowActive ());
+    // Booleans are returned as the strings "true"/"false": on macOS the CEF
+    // bridge delivers a JS::Value(bool) to the page as an empty string, so a
+    // native `true` arrives falsy and e.g. the Capture button never enables.
+    // Strings cross the bridge intact on both platforms; the page parses them
+    // with asBool().
+    auto boolValue = [] (bool b) -> GS::Ref<JS::Base> {
+        return new JS::Value (GS::UniString (b ? "true" : "false"));
+    };
+
+    // Is the 3D window currently active?  -> "true" | "false"
+    jsACAPI->AddItem (new JS::Function ("Is3DActive", [boolValue] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
+        bool active = false;
+        RunOnMainThread ([&] { active = NanoBanana::Is3DWindowActive (); });
+        return boolValue (active);
     }));
 
-    // Capture the current 3D view -> "data:image/png;base64,..." (or "")
-    jsACAPI->AddItem (new JS::Function ("Capture3D", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
-        return new JS::Value (NanoBanana::CaptureCurrent3DAsDataUrl ());
+    // Start capturing the current 3D view -> "true" | "false" (started?).
+    // The capture itself runs as a module command from the event loop, because
+    // ACAPI_ProjectOperation_Save is refused inside this bridge callback
+    // (APIERR_REFUSEDCMD). The page polls GetCaptureResult for the outcome.
+    jsACAPI->AddItem (new JS::Function ("Capture3D", [boolValue] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
+        bool started = false;
+        RunOnMainThread ([&] { started = NanoBanana::StartAsyncCapture (); });
+        return boolValue (started);
     }));
 
-    // Is the active provider configured enough to run?  -> bool
-    jsACAPI->AddItem (new JS::Function ("HasApiKey", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
-        return new JS::Value (NanoBanana::IsConfigured ());
+    // Poll the async capture -> "PENDING" | "data:image/png;base64,..." | "ERROR: <msg>" | ""
+    jsACAPI->AddItem (new JS::Function ("GetCaptureResult", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
+        GS::UniString result;
+        RunOnMainThread ([&] { result = NanoBanana::FetchCaptureResult (); });
+        return new JS::Value (result);
+    }));
+
+    // Is the active provider configured enough to run?  -> "true" | "false"
+    jsACAPI->AddItem (new JS::Function ("HasApiKey", [boolValue] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
+        bool configured = false;
+        RunOnMainThread ([&] { configured = NanoBanana::IsConfigured (); });
+        return boolValue (configured);
     }));
 
     // Which backend is active?  -> "gemini" | "flux" | "local"
     // The page uses this to send the right region payload (marker vs. mask).
     jsACAPI->AddItem (new JS::Function ("GetProvider", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
-        switch (NanoBanana::LoadProvider ()) {
+        NanoBanana::Provider provider = NanoBanana::Provider::Gemini;
+        RunOnMainThread ([&] { provider = NanoBanana::LoadProvider (); });
+        switch (provider) {
             case NanoBanana::Provider::Flux:  return new JS::Value (GS::UniString ("flux"));
             case NanoBanana::Provider::Local: return new JS::Value (GS::UniString ("local"));
             default:                          return new JS::Value (GS::UniString ("gemini"));
         }
     }));
 
-    // Open the settings dialog -> bool (true if the active provider is now configured)
-    jsACAPI->AddItem (new JS::Function ("OpenSettings", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
-        ShowNanoBananaSettingsDialog ();
-        return new JS::Value (NanoBanana::IsConfigured ());
+    // Open the settings dialog -> "true" if the active provider is now configured
+    jsACAPI->AddItem (new JS::Function ("OpenSettings", [boolValue] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
+        bool configured = false;
+        RunOnMainThread ([&] {
+            ShowNanoBananaSettingsDialog ();
+            configured = NanoBanana::IsConfigured ();
+        });
+        return boolValue (configured);
     }));
 
     // Render: params = [prompt, mainImage, originalCapture?, userRef1?, ...] -> new data URL, or "ERROR: <msg>"
@@ -211,23 +274,38 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
         GS::Array<GS::UniString> refs;
         GetRenderParams (params, prompt, dataUrl, originalCapture, mask, refs, promptHistory);
 
-        if (!NanoBanana::IsConfigured ())
+        // Snapshot all settings on the main thread; the network call below
+        // then runs without touching the Archicad preferences.
+        bool configured = false;
+        NanoBanana::Provider provider = NanoBanana::Provider::Gemini;
+        GS::UniString geminiKey, geminiModel, fluxKey, fluxUrl, fluxModel, localUrl;
+        RunOnMainThread ([&] {
+            configured  = NanoBanana::IsConfigured ();
+            provider    = NanoBanana::LoadProvider ();
+            geminiKey   = NanoBanana::LoadApiKey ();
+            geminiModel = NanoBanana::LoadModel ();
+            fluxKey     = NanoBanana::LoadFluxKey ();
+            fluxUrl     = NanoBanana::LoadFluxUrl ();
+            fluxModel   = NanoBanana::LoadFluxModel ();
+            localUrl    = NanoBanana::LoadLocalUrl ();
+        });
+
+        if (!configured)
             return new JS::Value (GS::UniString ("ERROR: Image backend not configured. Open settings first."));
 
         GS::UniString outDataUrl, errMsg;
         bool ok = false;
-        switch (NanoBanana::LoadProvider ()) {
+        switch (provider) {
             case NanoBanana::Provider::Flux:
-                ok = NanoBanana::FluxRenderImage (NanoBanana::LoadFluxKey (), NanoBanana::LoadFluxUrl (),
-                                                  NanoBanana::LoadFluxModel (), prompt, dataUrl, mask, promptHistory,
-                                                  outDataUrl, errMsg);
+                ok = NanoBanana::FluxRenderImage (fluxKey, fluxUrl, fluxModel, prompt, dataUrl, mask,
+                                                  promptHistory, outDataUrl, errMsg);
                 break;
             case NanoBanana::Provider::Local:
-                ok = NanoBanana::WebUIRenderImage (NanoBanana::LoadLocalUrl (), prompt, dataUrl, mask,
+                ok = NanoBanana::WebUIRenderImage (localUrl, prompt, dataUrl, mask,
                                                    promptHistory, outDataUrl, errMsg);
                 break;
             default:
-                ok = NanoBanana::RenderImage (NanoBanana::LoadApiKey (), prompt, dataUrl, originalCapture,
+                ok = NanoBanana::RenderImage (geminiKey, geminiModel, prompt, dataUrl, originalCapture,
                                               refs, promptHistory, outDataUrl, errMsg);
                 break;
         }
@@ -237,16 +315,21 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
         return new JS::Value (GS::UniString ("ERROR: ") + errMsg);
     }));
 
-    // Save a data URL image to disk via native save dialog -> bool (true if saved)
-    jsACAPI->AddItem (new JS::Function ("SaveImage", [] (GS::Ref<JS::Base> params) -> GS::Ref<JS::Base> {
-        return new JS::Value (SaveDataUrlToFile (GetStringParam (params)));
+    // Save a data URL image to disk via native save dialog -> "true" if saved
+    jsACAPI->AddItem (new JS::Function ("SaveImage", [boolValue] (GS::Ref<JS::Base> params) -> GS::Ref<JS::Base> {
+        bool saved = false;
+        RunOnMainThread ([&] { saved = SaveDataUrlToFile (GetStringParam (params)); });
+        return boolValue (saved);
     }));
 
     // Expand a brief prompt into a detailed one via a Gemini text model.
     // Uses the Gemini key regardless of the active provider -> new prompt, or "ERROR: <msg>"
     jsACAPI->AddItem (new JS::Function ("EnhancePrompt", [] (GS::Ref<JS::Base> params) -> GS::Ref<JS::Base> {
+        GS::UniString apiKey;
+        RunOnMainThread ([&] { apiKey = NanoBanana::LoadApiKey (); });
+
         GS::UniString outText, errMsg;
-        if (NanoBanana::EnhancePromptText (NanoBanana::LoadApiKey (), GetStringParam (params), outText, errMsg))
+        if (NanoBanana::EnhancePromptText (apiKey, GetStringParam (params), outText, errMsg))
             return new JS::Value (outText);
         return new JS::Value (GS::UniString ("ERROR: ") + errMsg);
     }));

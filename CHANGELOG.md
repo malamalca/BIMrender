@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- macOS: boolean return values from the `ARUTILS` JS bridge arrived in the
+  page as empty strings (the CEF bridge on Mac does not marshal
+  `JS::Value(bool)`), so the "Capture Current 3D" button never enabled, Send
+  always opened the settings dialog first, and Save always reported
+  "cancelled". The bridge now returns the strings `"true"`/`"false"` for all
+  boolean results ([NanoBananaPanel.cpp](Src/Common/NanoBananaPanel.cpp)) and
+  the page parses them with an `asBool()` helper that also accepts real
+  booleans ([nanoBanana.html](RFIX/nanoBanana.html)), keeping Windows
+  behaviour unchanged.
+- Capturing failed with `APIERR_REFUSEDCMD` because
+  `ACAPI_ProjectOperation_Save` may not be called from a browser JS bridge
+  callback ("notification level"). The capture now runs as a module command
+  (`NanoBanana::CaptureCommandHandler`, registered in
+  [BIMrender.c](Src/BIMrender.c)) posted to the main event loop via
+  `ACAPI_AddOnAddOnCommunication_CallFromEventLoop`; the page starts it with
+  `Capture3D` and polls `GetCaptureResult` until the data URL (or an error)
+  arrives, giving up with a clear error after 15 seconds
+  ([Capture3D.cpp](Src/NanoBanana/Capture3D.cpp),
+  [nanoBanana.html](RFIX/nanoBanana.html)). Note: the Demo version of
+  Archicad refuses every save operation with the same error — the panel now
+  reports this case explicitly ("The Demo version cannot save; a full license
+  is required") instead of the generic "make sure the 3D window is active"
+  message.
+- Error messages in the panel status line were overwritten by the 1-second
+  availability poll after a moment ("flashing"); they now stay visible until
+  the next user action.
+
+### Changed
+- Misleading "not in 3D" guidance in the panel: the placeholder and status
+  text said to *re-open the command* from the 3D window, but the palette
+  polls the active window every second, so simply switching to the 3D window
+  enables the Capture button. The texts in
+  [nanoBanana.html](RFIX/nanoBanana.html) now say to switch to the 3D window.
+- JS bridge hardening in [NanoBananaPanel.cpp](Src/Common/NanoBananaPanel.cpp):
+  all `ARUTILS` handlers marshal their Archicad-touching work to the main
+  thread via `GS::MessageLoopExecutor` (which thread CEF delivers JS callbacks
+  on is platform-dependent: main thread on macOS, worker thread on Windows;
+  ACAPI/DG calls are main-thread-only). Long-running network calls stay off
+  the main thread so the UI keeps responding during a render. As part of
+  this, `RenderImage` in [GeminiClient.cpp](Src/NanoBanana/GeminiClient.cpp)
+  takes the model id as a parameter instead of reading Archicad preferences
+  internally, and `InitBrowserControl` registers the JS bridge before loading
+  the page.
+
 ## [1.0.1] - 2026-07-01
 
 ### Added

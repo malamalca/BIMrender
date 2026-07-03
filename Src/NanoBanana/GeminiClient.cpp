@@ -6,7 +6,6 @@
 #include "NanoBanana/GeminiClient.hpp"
 #include "NanoBanana/Base64.hpp"
 #include "NanoBanana/JsonUtils.hpp"
-#include "NanoBanana/Settings.hpp"
 
 #include "HTTP/Client/ClientConnection.hpp"
 #include "IBinaryChannelUtilities.hpp"
@@ -333,6 +332,7 @@ static bool ExtractText (const GS::UniString& responseJson, GS::UniString& outTe
 // RenderImage – the public entry point.
 // ---------------------------------------------------------------------------
 bool RenderImage (const GS::UniString& apiKey,
+                  const GS::UniString& model,
                   const GS::UniString& prompt,
                   const GS::UniString& inputDataUrl,
                   const GS::UniString& originalCapture,
@@ -417,7 +417,7 @@ bool RenderImage (const GS::UniString& apiKey,
 
     int           status   = 0;
     GS::UniString respBody;
-    if (!GeminiPostJson (apiKey, LoadModel (), body, respBody, status, errMsg))
+    if (!GeminiPostJson (apiKey, model, body, respBody, status, errMsg))
         return false;
 
     if (status != 200) {

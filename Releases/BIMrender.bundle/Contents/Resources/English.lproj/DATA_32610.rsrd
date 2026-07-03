@@ -257,7 +257,7 @@
         <div id="placeholder">
             <div class="big">🍌</div>
             Click <b>Capture Current 3D</b> to begin.<br>
-            <span style="font-size:11px">(open this command from the 3D window)</span>
+            <span style="font-size:11px">(the button enables while the 3D window is active)</span>
         </div>
         <img id="imgAfter"  class="layer" alt="render">
         <img id="imgBefore" class="layer" alt="original">
@@ -387,24 +387,33 @@
     }
 
     // ---- 3D availability ----------------------------------------------
-    // This is a MODAL dialog, so the active Archicad window can't change while
-    // it is open. We still poll, because (a) window.ARUTILS is injected by the
-    // host asynchronously after the page loads, so the first check can run
-    // before it exists, and (b) it lets the button recover if the very first
-    // reading is taken before the window has settled. The poll never fights the
-    // render: while a request is in flight the capture button stays disabled.
+    // In release builds this page lives in a modeless palette, so the active
+    // Archicad window can change at any time — the poll picks that up and
+    // enables/disables the capture button live. Polling also covers (a)
+    // window.ARUTILS being injected asynchronously after the page loads, and
+    // (b) the first reading being taken before the window has settled. The
+    // poll never fights the render: while a request is in flight the capture
+    // button stays disabled.
+    // Bridge boolean results arrive as real booleans on Windows but as the
+    // strings "true"/"false" from the host (see RegisterJavaScriptObject);
+    // accept both.
+    function asBool(v) { return v === true || v === "true"; }
+
     function refreshThreeD() {
         if (!window.ARUTILS) return;   // host bridge not injected yet; poll will retry
         if (isRendering) return;       // don't re-enable capture during a render
-        ARUTILS.Is3DActive().then(function (active) {
-            if (isRendering) return;
+        ARUTILS.Is3DActive().then(function (activeRaw) {
+            if (isRendering || capturing) return;   // don't fight an active capture
+            var active = asBool(activeRaw);
             captureBtn.disabled = !active;
             if (active) {
                 captureBtn.title = "";
-                if (!currentDataUrl) setStatus("Click “Capture Current 3D” to begin.");
+                // Leave error messages visible until the next user action.
+                if (!currentDataUrl && statusEl.className !== "error")
+                    setStatus("Click “Capture Current 3D” to begin.");
             } else {
-                captureBtn.title = "Open this command while the 3D window is active";
-                setStatus("Switch to the 3D window, then re-open this command to capture a view.", true);
+                captureBtn.title = "Switch to the 3D window to enable capturing";
+                setStatus("Switch to the 3D window to capture a view.", true);
             }
         });
     }
@@ -455,28 +464,59 @@
     });
 
     // ---- capture ------------------------------------------------------
+    // Capture3D only *starts* the capture (the host performs it from the
+    // event loop, where saving the 3D view is allowed); the result is picked
+    // up by polling GetCaptureResult until it stops returning "PENDING".
+    var capturing = false;
+
+    function finishCapture(dataUrl) {
+        capturing = false;
+        if (!dataUrl || dataUrl.indexOf("ERROR:") === 0) {
+            setStatus(dataUrl ? dataUrl.substring(6).trim()
+                              : "Could not capture. Make sure the 3D window is active.", true);
+            return;
+        }
+        originalDataUrl = dataUrl;
+        currentDataUrl  = dataUrl;   // edits start from the capture
+        history = [dataUrl];
+        iteration = 0;
+        imgBefore.src = dataUrl;
+        imgBefore.style.display = "block";
+        placeholder.style.display = "none";
+        showCompare(false);     // fresh capture clears any previous render
+        sendBtn.disabled = false;
+        saveBtn.disabled = false;
+        resetBtn.disabled = true;
+        undoBtn.disabled  = true;
+        markBtn.disabled  = false;
+        clearRegion();          // a new capture invalidates any marked region
+        setStatus("Captured. Enter an instruction and press Send.");
+    }
+
+    var capturePollStart = 0;
+    function pollCaptureResult() {
+        if (Date.now() - capturePollStart > 15000) {   // safety net: never hang forever
+            finishCapture("ERROR: capture timed out");
+            return;
+        }
+        ARUTILS.GetCaptureResult().then(function (res) {
+            if (res === "PENDING") { setTimeout(pollCaptureResult, 150); return; }
+            finishCapture(res);
+        });
+    }
+
     captureBtn.addEventListener('click', function () {
+        if (capturing) return;
+        capturing = true;
         setStatus("Capturing 3D view…");
-        ARUTILS.Capture3D().then(function (dataUrl) {
-            if (!dataUrl) {
+        ARUTILS.Capture3D().then(function (started) {
+            if (!asBool(started)) {
+                capturing = false;
                 setStatus("Could not capture. Make sure the 3D window is active.", true);
                 return;
             }
-            originalDataUrl = dataUrl;
-            currentDataUrl  = dataUrl;   // edits start from the capture
-            history = [dataUrl];
-            iteration = 0;
-            imgBefore.src = dataUrl;
-            imgBefore.style.display = "block";
-            placeholder.style.display = "none";
-            showCompare(false);     // fresh capture clears any previous render
-            sendBtn.disabled = false;
-            saveBtn.disabled = false;
-            resetBtn.disabled = true;
-            undoBtn.disabled  = true;
-            markBtn.disabled  = false;
-            clearRegion();          // a new capture invalidates any marked region
-            setStatus("Captured. Enter an instruction and press Send.");
+            capturePollStart = Date.now();
+            pollCaptureResult();
         });
     });
 
@@ -771,11 +811,11 @@
     sendBtn.addEventListener('click', function () {
         if (!window.ARUTILS) return;
         ARUTILS.HasApiKey().then(function (has) {
-            if (has) { doRender(); return; }
+            if (asBool(has)) { doRender(); return; }
             // No key yet: open settings, then render if the user added one.
             ARUTILS.OpenSettings().then(function (nowHas) {
                 refreshProvider();
-                if (nowHas) doRender();
+                if (asBool(nowHas)) doRender();
                 else {
                     setStatus("An API key is required to render.", true);
                     promptEl.focus();
@@ -887,7 +927,7 @@
     saveBtn.addEventListener('click', function () {
         if (!currentDataUrl) return;
         ARUTILS.SaveImage(currentDataUrl).then(function (ok) {
-            if (!ok) setStatus("Save cancelled.");
+            if (!asBool(ok)) setStatus("Save cancelled.");
         });
     });
 

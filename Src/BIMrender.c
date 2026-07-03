@@ -15,6 +15,7 @@
 #include	"ACAPI_Goodies.h"
 #include	"DG.h"
 #include	"ResourceIds.hpp"
+#include	"NanoBanana/Capture3D.hpp"	// async capture module command
 
 // NanoBanana surfaces as a modal dialog in DEBUG builds and as a modeless
 // palette in release builds; both share NanoBananaPanel (Common/).
@@ -96,6 +97,13 @@ GSErrCode RegisterInterface (void)
 	if (DBERROR (err != NoError))
 		return err;
 
+	// The 3D capture runs as a module command posted to the event loop, because
+	// ACAPI_ProjectOperation_Save is refused inside browser JS bridge callbacks
+	// (APIERR_REFUSEDCMD on macOS). See Capture3D.hpp.
+	err = ACAPI_AddOnAddOnCommunication_RegisterSupportedService (NanoBanana::CaptureCmdID, NanoBanana::CaptureCmdVersion);
+	if (DBERROR (err != NoError))
+		return err;
+
 	return NoError;
 } // RegisterInterface
 
@@ -106,6 +114,11 @@ GSErrCode RegisterInterface (void)
 GSErrCode Initialize (void)
 {
 	GSErrCode err = ACAPI_MenuItem_InstallMenuHandler (ID_MENU_NANOBANANA, MenuCommandHandler);
+	if (DBERROR (err != NoError))
+		return err;
+
+	err = ACAPI_AddOnIntegration_InstallModulCommandHandler (NanoBanana::CaptureCmdID, NanoBanana::CaptureCmdVersion,
+	                                                         NanoBanana::CaptureCommandHandler);
 	if (DBERROR (err != NoError))
 		return err;
 

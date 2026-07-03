@@ -12,6 +12,9 @@ namespace NanoBanana {
 // the produced image.
 //
 //   apiKey          - Google Generative Language API key.
+//   model           - Gemini image model id (loaded from Settings by the caller;
+//                     passed in so this call never touches Archicad preferences,
+//                     which are main-thread-only, from a worker thread).
 //   prompt          - free-text editing instruction.
 //   inputDataUrl    - the working image as a "data:image/...;base64,..." string.
 //   originalCapture - the full-quality 3D capture as a data URL, or empty when it
@@ -27,6 +30,7 @@ namespace NanoBanana {
 //
 // Returns true on success.
 bool RenderImage (const GS::UniString& apiKey,
+                  const GS::UniString& model,
                   const GS::UniString& prompt,
                   const GS::UniString& inputDataUrl,
                   const GS::UniString& originalCapture,
