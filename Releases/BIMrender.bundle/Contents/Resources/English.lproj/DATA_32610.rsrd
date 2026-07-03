@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Render</title>
+<style>
+    :root {
+        --bg:        #1e1f22;
+        --panel:     #2b2d31;
+        --stage:     #141517;
+        --accent:    #e0a226;
+        --accent-hi: #f4b942;
+        --text:      #e8e8e8;
+        --muted:     #9aa0a6;
+        --border:    #3a3d42;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+        margin: 0; height: 100%;
+        background: var(--bg); color: var(--text);
+        font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-size: 13px;
+        overflow: hidden;
+    }
+    #app {
+        display: flex; flex-direction: column;
+        height: 100vh; padding: 10px; gap: 10px;
+    }
+
+    /* --- top bar --- */
+    #topbar { display: flex; align-items: center; gap: 8px; }
+    button {
+        font: inherit; color: var(--text);
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 6px; padding: 8px 12px; cursor: pointer;
+        transition: background .12s, border-color .12s;
+    }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { opacity: .45; cursor: default; }
+    button.primary {
+        background: var(--accent); color: #1a1a1a; border-color: var(--accent);
+        font-weight: 600;
+    }
+    button.primary:hover:not(:disabled) { background: var(--accent-hi); }
+    #captureBtn { flex: 1; }
+    #settingsBtn { padding: 8px 10px; }
+    .spacer { flex: 1; }
+
+    /* --- image stage --- */
+    #stageWrap {
+        flex: 1; position: relative;
+        background: var(--stage);
+        border: 1px solid var(--border); border-radius: 8px;
+        overflow: hidden;
+        display: flex; align-items: center; justify-content: center;
+    }
+    #placeholder {
+        color: var(--muted); text-align: center; padding: 20px;
+        line-height: 1.6; user-select: none;
+    }
+    #placeholder .big { font-size: 34px; margin-bottom: 8px; }
+
+    .layer {
+        position: absolute; inset: 0;
+        width: 100%; height: 100%;
+        object-fit: contain;
+        user-select: none; -webkit-user-drag: none;
+        display: none;
+    }
+    #imgBefore { z-index: 2; }
+    #imgAfter  { z-index: 1; }
+
+    /* compare handle */
+    #handle {
+        position: absolute; top: 0; bottom: 0;
+        width: 2px; background: var(--accent);
+        left: 50%; transform: translateX(-1px);
+        z-index: 5; display: none; cursor: ew-resize;
+    }
+    #handle::after {
+        content: "‹ ›";
+        position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        width: 34px; height: 34px; border-radius: 50%;
+        background: var(--accent); color: #1a1a1a;
+        font-weight: 700; letter-spacing: 1px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    /* labels */
+    .tag {
+        position: absolute; top: 8px;
+        font-size: 11px; padding: 2px 8px; border-radius: 4px;
+        background: rgba(0,0,0,.55); color: #fff;
+        z-index: 6; display: none; user-select: none;
+    }
+    #tagBefore { left: 8px; }
+    #tagAfter  { right: 8px; }
+
+    /* spinner overlay */
+    #overlay {
+        position: absolute; inset: 0; z-index: 10;
+        background: rgba(10,10,12,.72);
+        display: none; flex-direction: column; gap: 14px;
+        align-items: center; justify-content: center;
+    }
+    .spinner {
+        width: 44px; height: 44px; border-radius: 50%;
+        border: 4px solid rgba(255,255,255,.18);
+        border-top-color: var(--accent);
+        animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #overlay .label { color: var(--muted); }
+
+    /* --- prompt area --- */
+    #prompt {
+        width: 100%; min-height: 64px; max-height: 140px; resize: vertical;
+        background: var(--panel); color: var(--text);
+        border: 1px solid var(--border); border-radius: 8px;
+        padding: 10px; font: inherit;
+    }
+    #prompt:focus { outline: none; border-color: var(--accent); }
+    #bottombar { display: flex; gap: 8px; align-items: center; }
+    #status { color: var(--muted); flex: 1; min-height: 16px; }
+    #status.error { color: #ff7676; }
+    #sendBtn { min-width: 96px; position: relative; }
+
+    /* --- send button loading spinner --- */
+    .btn-spinner {
+        display: inline-block;
+        width: 14px; height: 14px;
+        border: 2px solid rgba(26,26,26,.25);
+        border-top-color: #1a1a1a;
+        border-radius: 50%;
+        animation: spin .7s linear infinite;
+        vertical-align: middle;
+        margin-right: 6px;
+    }
+
+    /* --- reference images section --- */
+    #refSection {
+        display: flex; align-items: center; gap: 8px;
+        min-height: 64px; flex-shrink: 0;
+    }
+    #refLabel {
+        font-size: 12px; color: var(--muted); white-space: nowrap;
+        user-select: none;
+    }
+    #refThumbs {
+        display: flex; gap: 6px; flex: 1; overflow-x: auto;
+        align-items: center;
+    }
+    .ref-thumb-wrap {
+        position: relative; width: 52px; height: 52px;
+        border-radius: 6px; overflow: hidden;
+        border: 1px solid var(--border); flex-shrink: 0;
+    }
+    .ref-thumb-wrap img {
+        width: 100%; height: 100%; object-fit: cover;
+        display: block;
+    }
+    .ref-thumb-remove {
+        position: absolute; top: 1px; right: 1px;
+        width: 16px; height: 16px; border-radius: 50%;
+        background: rgba(255,70,70,.85); color: #fff;
+        font-size: 10px; line-height: 16px; text-align: center;
+        cursor: pointer; border: none; padding: 0;
+    }
+    .ref-thumb-remove:hover { background: rgba(255,70,70,1); }
+    .ref-thumb-index {
+        position: absolute; bottom: 1px; left: 1px;
+        min-width: 16px; height: 16px; border-radius: 4px;
+        background: rgba(0,0,0,.72); color: #fff;
+        font-size: 10px; line-height: 16px; text-align: center;
+        font-weight: 600; padding: 0 3px; pointer-events: none;
+    }
+    #addRefBtn {
+        font-size: 16px; padding: 4px 10px;
+        line-height: 1; flex-shrink: 0;
+    }
+
+    /* --- region marquee --- */
+    #markCanvas {
+        position: absolute; inset: 0;
+        width: 100%; height: 100%;
+        z-index: 7;
+        pointer-events: none;   /* only captures clicks while drawing */
+        cursor: crosshair;
+    }
+    #markBtn { flex-shrink: 0; }
+    #markBtn.active {
+        background: var(--accent); color: #1a1a1a;
+        border-color: var(--accent); font-weight: 600;
+    }
+
+    /* --- provider badge (B6) --- */
+    #providerBadge {
+        display: flex; align-items: center; flex-shrink: 0;
+        font-size: 11px; padding: 0 9px; border-radius: 6px;
+        background: var(--panel); border: 1px solid var(--border);
+        color: var(--muted); white-space: nowrap; user-select: none;
+        align-self: stretch;
+    }
+    #providerBadge .dot {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: var(--accent); margin-right: 6px; flex-shrink: 0;
+    }
+
+    /* --- prompt tools: enhance / templates / history (E1, E2, E3) --- */
+    #promptTools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    #promptTools button { padding: 5px 10px; font-size: 12px; }
+    #promptTools button.active { border-color: var(--accent); color: var(--accent-hi); }
+    .tool-panel {
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 8px; padding: 8px; gap: 6px;
+        display: flex; align-items: center; flex-wrap: wrap;
+    }
+    .tool-panel.collapsed { display: none; }
+    .tool-panel select {
+        font: inherit; font-size: 12px; color: var(--text);
+        background: var(--stage); border: 1px solid var(--border);
+        border-radius: 6px; padding: 5px 6px; flex: 1; min-width: 108px;
+    }
+    .tool-panel select:focus { outline: none; border-color: var(--accent); }
+    #histList {
+        display: flex; flex-direction: column; gap: 4px;
+        width: 100%; max-height: 132px; overflow-y: auto;
+    }
+    .hist-item {
+        text-align: left; width: 100%;
+        background: var(--stage); border: 1px solid var(--border);
+        border-radius: 6px; padding: 6px 8px; font-size: 12px; color: var(--text);
+        cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .hist-item:hover { border-color: var(--accent); }
+    #histEmpty { color: var(--muted); font-size: 12px; padding: 4px 2px; }
+    .btn-spinner-dark {
+        display: inline-block; width: 12px; height: 12px;
+        border: 2px solid rgba(255,255,255,.25); border-top-color: var(--accent);
+        border-radius: 50%; animation: spin .7s linear infinite;
+        vertical-align: middle; margin-right: 6px;
+    }
+</style>
+</head>
+<body>
+<div id="app">
+
+    <div id="topbar">
+        <button id="captureBtn" disabled>📷 Capture Current 3D</button>
+        <button id="markBtn" title="Mark a region of the image to edit" disabled>▱ Mark region</button>
+        <span id="providerBadge" title="Active AI provider"><span class="dot"></span>…</span>
+        <button id="settingsBtn" title="API key settings">⚙</button>
+    </div>
+
+    <div id="stageWrap">
+        <div id="placeholder">
+            <div class="big">🍌</div>
+            Click <b>Capture Current 3D</b> to begin.<br>
+            <span style="font-size:11px">(open this command from the 3D window)</span>
+        </div>
+        <img id="imgAfter"  class="layer" alt="render">
+        <img id="imgBefore" class="layer" alt="original">
+        <div id="tagBefore" class="tag">Original</div>
+        <div id="tagAfter"  class="tag">AI Render</div>
+        <div id="handle"></div>
+        <canvas id="markCanvas"></canvas>
+        <div id="overlay">
+            <div class="spinner"></div>
+            <div class="label">Rendering ...</div>
+        </div>
+    </div>
+
+    <div id="refSection">
+        <span id="refLabel">📎 Attachments</span>
+        <div id="refThumbs"></div>
+        <button id="addRefBtn" title="Add attachment image (max 5)">＋ Add</button>
+        <input type="file" id="refFileInput" multiple accept="image/png,image/jpeg,image/webp" style="display:none">
+    </div>
+
+    <div id="promptTools">
+        <button id="enhanceBtn" title="Expand your prompt into a detailed one using Gemini">✨ Enhance</button>
+        <button id="tmplToggle" title="Build a prompt from presets">🎛 Templates</button>
+        <button id="histToggle" title="Reuse a previous prompt">🕘 History</button>
+    </div>
+
+    <div id="tmplPanel" class="tool-panel collapsed">
+        <select id="tmplStyle" title="Architectural style">
+            <option value="">Style…</option>
+            <option value="modernist architecture">Modernist</option>
+            <option value="brutalist concrete architecture">Brutalist</option>
+            <option value="Mediterranean architecture">Mediterranean</option>
+            <option value="Scandinavian architecture">Scandinavian</option>
+            <option value="industrial-style architecture">Industrial</option>
+            <option value="minimalist architecture">Minimalist</option>
+            <option value="traditional architecture">Traditional</option>
+        </select>
+        <select id="tmplTime" title="Time of day / lighting">
+            <option value="">Time…</option>
+            <option value="golden-hour lighting">Golden hour</option>
+            <option value="blue-hour twilight">Blue hour</option>
+            <option value="bright clear midday sun">Midday clear</option>
+            <option value="soft overcast daylight">Midday overcast</option>
+            <option value="night exterior with warm artificial lighting">Night exterior</option>
+            <option value="cozy interior night lighting">Night interior</option>
+        </select>
+        <select id="tmplWeather" title="Weather / atmosphere">
+            <option value="">Weather…</option>
+            <option value="clear sky">Clear</option>
+            <option value="light fog">Light fog</option>
+            <option value="light snowfall">Light snow</option>
+            <option value="rain with wet reflective surfaces">Rain, wet surfaces</option>
+            <option value="dramatic cloudy sky">Dramatic clouds</option>
+        </select>
+        <select id="tmplCamera" title="Camera / lens">
+            <option value="">Camera…</option>
+            <option value="wide-angle 16mm lens">Wide 16mm</option>
+            <option value="standard 35mm lens">Standard 35mm</option>
+            <option value="85mm telephoto lens">Telephoto 85mm</option>
+            <option value="aerial drone view">Drone aerial</option>
+            <option value="eye-level perspective">Eye-level</option>
+        </select>
+        <button id="tmplApply" class="primary" title="Append the preset to your prompt">Insert</button>
+    </div>
+
+    <div id="histPanel" class="tool-panel collapsed">
+        <div id="histList"></div>
+        <button id="histClear" title="Remove all saved prompts">Clear history</button>
+    </div>
+
+    <textarea id="prompt" placeholder="Describe how the AI should transform the image, e.g. &quot;photorealistic dusk lighting&quot;"></textarea>
+
+    <div id="bottombar">
+        <div id="status"></div>
+        <button id="undoBtn" disabled title="Step back one edit">↶ Undo</button>
+        <button id="resetBtn" disabled title="Discard edits and start again from the captured image">Start over</button>
+        <button id="saveBtn" disabled title="Save last AI render to disk">💾 Save</button>
+        <button id="sendBtn" class="primary" disabled>Send</button>
+    </div>
+
+</div>
+
+<script>
+(function () {
+    "use strict";
+
+    var captureBtn  = document.getElementById('captureBtn');
+    var settingsBtn = document.getElementById('settingsBtn');
+    var sendBtn     = document.getElementById('sendBtn');
+    var resetBtn    = document.getElementById('resetBtn');
+    var saveBtn     = document.getElementById('saveBtn');
+    var undoBtn     = document.getElementById('undoBtn');
+    var promptEl    = document.getElementById('prompt');
+    var statusEl    = document.getElementById('status');
+    var placeholder = document.getElementById('placeholder');
+    var imgBefore   = document.getElementById('imgBefore');
+    var imgAfter    = document.getElementById('imgAfter');
+    var handle      = document.getElementById('handle');
+    var tagBefore   = document.getElementById('tagBefore');
+    var tagAfter    = document.getElementById('tagAfter');
+    var overlay     = document.getElementById('overlay');
+    var stageWrap   = document.getElementById('stageWrap');
+
+    // ---- reference images ---------------------------------------------
+    var refThumbs   = document.getElementById('refThumbs');
+    var addRefBtn   = document.getElementById('addRefBtn');
+    var refFileInput= document.getElementById('refFileInput');
+    var maxRefs     = 5;
+    var referenceImages = [];   // base64 data URLs, persists across renders
+
+    var originalDataUrl = "";   // the captured 3D view (left side of the slider)
+    var currentDataUrl  = "";   // the working image: latest render, or the capture
+    var history = [];           // [capture, edit1, edit2, ...]; last = current
+    var promptHistory = [];     // text-only prompt history for AI context
+    var iteration = 0;          // number of AI edits applied since the capture
+    var hasRender = false;
+    var sliderPct = 50;
+    var isRendering = false;    // true while a Render call is in flight
+    // Each entry is a full-resolution PNG data URL (large), so cap how many we
+    // retain for undo to keep memory bounded. history[0] (the capture) is never
+    // dropped so "Start over" and the original reference stay valid.
+    var maxHistory = 10;
+
+    function setStatus(msg, isError) {
+        statusEl.textContent = msg || "";
+        statusEl.className = isError ? "error" : "";
+    }
+
+    // ---- 3D availability ----------------------------------------------
+    // This is a MODAL dialog, so the active Archicad window can't change while
+    // it is open. We still poll, because (a) window.ARUTILS is injected by the
+    // host asynchronously after the page loads, so the first check can run
+    // before it exists, and (b) it lets the button recover if the very first
+    // reading is taken before the window has settled. The poll never fights the
+    // render: while a request is in flight the capture button stays disabled.
+    function refreshThreeD() {
+        if (!window.ARUTILS) return;   // host bridge not injected yet; poll will retry
+        if (isRendering) return;       // don't re-enable capture during a render
+        ARUTILS.Is3DActive().then(function (active) {
+            if (isRendering) return;
+            captureBtn.disabled = !active;
+            if (active) {
+                captureBtn.title = "";
+                if (!currentDataUrl) setStatus("Click “Capture Current 3D” to begin.");
+            } else {
+                captureBtn.title = "Open this command while the 3D window is active";
+                setStatus("Switch to the 3D window, then re-open this command to capture a view.", true);
+            }
+        });
+    }
+    setInterval(function () { refreshThreeD(); refreshProvider(); }, 1000);
+
+    // ---- compare slider ----------------------------------------------
+    function applySlider() {
+        // Show left part of "before", reveal "after" on the right.
+        imgBefore.style.clipPath = "inset(0 " + (100 - sliderPct) + "% 0 0)";
+        handle.style.left = sliderPct + "%";
+    }
+    function showCompare(show) {
+        hasRender = show;
+        imgAfter.style.display = show ? "block" : "none";
+        handle.style.display   = show ? "block" : "none";
+        tagBefore.style.display = (show && originalDataUrl) ? "block" : "none";
+        tagAfter.style.display  = show ? "block" : "none";
+        if (show) { sliderPct = 50; applySlider(); }
+        else { imgBefore.style.clipPath = "none"; }
+    }
+
+    function startDrag(ev) {
+        if (!hasRender) return;
+        ev.preventDefault();
+        function move(e) {
+            var rect = stageWrap.getBoundingClientRect();
+            var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+            sliderPct = Math.max(0, Math.min(100, (x / rect.width) * 100));
+            applySlider();
+        }
+        function up() {
+            window.removeEventListener('mousemove', move);
+            window.removeEventListener('mouseup', up);
+            window.removeEventListener('touchmove', move);
+            window.removeEventListener('touchend', up);
+        }
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', up);
+        window.addEventListener('touchmove', move, {passive:false});
+        window.addEventListener('touchend', up);
+        move(ev);
+    }
+    handle.addEventListener('mousedown', startDrag);
+    handle.addEventListener('touchstart', startDrag, {passive:false});
+    stageWrap.addEventListener('mousedown', function (e) {
+        if (markDrawing) return;                       // don't slide while marking a region
+        if (hasRender && e.target !== handle) startDrag(e);
+    });
+
+    // ---- capture ------------------------------------------------------
+    captureBtn.addEventListener('click', function () {
+        setStatus("Capturing 3D view…");
+        ARUTILS.Capture3D().then(function (dataUrl) {
+            if (!dataUrl) {
+                setStatus("Could not capture. Make sure the 3D window is active.", true);
+                return;
+            }
+            originalDataUrl = dataUrl;
+            currentDataUrl  = dataUrl;   // edits start from the capture
+            history = [dataUrl];
+            iteration = 0;
+            imgBefore.src = dataUrl;
+            imgBefore.style.display = "block";
+            placeholder.style.display = "none";
+            showCompare(false);     // fresh capture clears any previous render
+            sendBtn.disabled = false;
+            saveBtn.disabled = false;
+            resetBtn.disabled = true;
+            undoBtn.disabled  = true;
+            markBtn.disabled  = false;
+            clearRegion();          // a new capture invalidates any marked region
+            setStatus("Captured. Enter an instruction and press Send.");
+        });
+    });
+
+    // ---- apply the working state at history[history.length-1] ----------
+    function applyWorkingState() {
+        currentDataUrl = history[history.length - 1];
+        iteration = history.length - 1;
+        if (iteration === 0) {
+            // Back to the original capture — show it unclipped.
+            imgBefore.style.clipPath = "none";
+            imgBefore.src = currentDataUrl;
+            imgBefore.style.display = "block";
+            showCompare(false);
+            resetBtn.disabled = true;
+        } else {
+            // Reset clipPath before swapping sources to prevent visual corruption.
+            imgBefore.style.clipPath = "none";
+            imgBefore.src = history[history.length - 2];  // left = previous iteration
+            imgAfter.src  = currentDataUrl;                // right = latest result
+            showCompare(true);
+            resetBtn.disabled = false;
+        }
+        undoBtn.disabled = history.length <= 1;
+    }
+
+    // ---- start over: revert the working image to the original capture --
+    resetBtn.addEventListener('click', function () {
+        if (!originalDataUrl) return;
+        history = [originalDataUrl];
+        promptHistory = [];                  // clear prompt history on reset
+        applyWorkingState();
+        clearRegion();
+        setStatus("Reverted to the captured image. The next instruction edits the original.");
+    });
+
+    // ---- undo: step back one edit -------------------------------------
+    undoBtn.addEventListener('click', function () {
+        if (history.length <= 1) return;
+        history.pop();
+        if (promptHistory.length > 0)
+            promptHistory.pop();              // undo also removes last prompt
+        applyWorkingState();
+        clearRegion();
+        setStatus(iteration === 0
+            ? "Undone. Back to the captured image."
+            : "Undone. Now at edit " + iteration + ".");
+    });
+
+    // ---- settings -----------------------------------------------------
+    settingsBtn.addEventListener('click', function () {
+        ARUTILS.OpenSettings().then(function () { refreshProvider(); });
+    });
+
+    // ---- region marquee (mark an area to edit) ------------------------
+    // The polygon is stored in IMAGE-native pixel coordinates (authoritative),
+    // and projected to the on-screen "contain"-fitted rect for drawing, so it
+    // stays correct when the palette is resized.
+    var markBtn       = document.getElementById('markBtn');
+    var markCanvas    = document.getElementById('markCanvas');
+    var markCtx       = markCanvas.getContext('2d');
+    var regionPolygon = [];      // [{x,y}, …] in image-native pixels
+    var regionActive  = false;   // a finished region is set
+    var markDrawing   = false;   // currently placing vertices
+    var markMouse     = null;    // {x,y} stage px, for the rubber-band edge
+    var lastRegionMask = "";     // white-on-black PNG of the region — kept for the
+                                 // precise (inpainting) backends added in Phase 2.
+    var REGION_NOTE = " Apply your edit ONLY inside the area enclosed by the magenta " +
+                      "outline; keep everything outside that outline exactly as in the " +
+                      "input. The magenta outline is only a guide — do not draw it in the result.";
+
+    // The element currently showing the working image (for its natural size).
+    function workingImgEl() { return (iteration > 0) ? imgAfter : imgBefore; }
+
+    function sizeMarkCanvas() {
+        markCanvas.width  = stageWrap.clientWidth;
+        markCanvas.height = stageWrap.clientHeight;
+    }
+
+    // object-fit:contain rect of the working image inside the canvas
+    function imgFit() {
+        var el = workingImgEl();
+        var IW = el.naturalWidth  || 1, IH = el.naturalHeight || 1;
+        var SW = markCanvas.width, SH = markCanvas.height;
+        var scale = Math.min(SW / IW, SH / IH);
+        return { scale: scale, ox: (SW - IW * scale) / 2, oy: (SH - IH * scale) / 2 };
+    }
+    function stageToImg(sx, sy) { var f = imgFit(); return { x: (sx - f.ox) / f.scale, y: (sy - f.oy) / f.scale }; }
+    function imgToStage(p)      { var f = imgFit(); return { x: p.x * f.scale + f.ox,  y: p.y * f.scale + f.oy }; }
+
+    function tracePolygon(ctx, ptsImg) {   // ptsImg in image coords (ctx at image scale)
+        ctx.beginPath();
+        ctx.moveTo(ptsImg[0].x, ptsImg[0].y);
+        for (var i = 1; i < ptsImg.length; i++) ctx.lineTo(ptsImg[i].x, ptsImg[i].y);
+        ctx.closePath();
+    }
+
+    function redrawMark() {
+        markCtx.clearRect(0, 0, markCanvas.width, markCanvas.height);
+        if (regionPolygon.length === 0) return;
+        var pts = regionPolygon.map(imgToStage);
+        markCtx.lineWidth = 2;
+        markCtx.strokeStyle = "rgba(255,0,255,0.95)";
+        markCtx.beginPath();
+        markCtx.moveTo(pts[0].x, pts[0].y);
+        for (var i = 1; i < pts.length; i++) markCtx.lineTo(pts[i].x, pts[i].y);
+        if (regionActive) {
+            markCtx.closePath();
+            markCtx.fillStyle = "rgba(255,0,255,0.20)";
+            markCtx.fill();
+        } else if (markMouse) {
+            markCtx.lineTo(markMouse.x, markMouse.y);   // rubber-band to cursor
+        }
+        markCtx.stroke();
+        markCtx.fillStyle = "rgba(255,0,255,1)";
+        for (var j = 0; j < pts.length; j++) {
+            markCtx.beginPath(); markCtx.arc(pts[j].x, pts[j].y, 4, 0, 6.2832); markCtx.fill();
+        }
+    }
+
+    function startMarking() {
+        if (!currentDataUrl) return;
+        regionPolygon = []; regionActive = false; markDrawing = true; markMouse = null;
+        sizeMarkCanvas();
+        markCanvas.style.pointerEvents = "auto";
+        markBtn.classList.add("active");
+        redrawMark();
+        setStatus("Mark a region: click to add points, double-click or Enter to finish, Esc to cancel.");
+    }
+    function finishMarking() {
+        if (regionPolygon.length < 3) { clearRegion(); return; }
+        markDrawing = false; regionActive = true; markMouse = null;
+        markCanvas.style.pointerEvents = "none";
+        redrawMark();
+        setStatus("Region marked — your instruction applies inside it. Click “Mark region” again to clear.");
+    }
+    function clearRegion() {
+        markDrawing = false; regionActive = false; regionPolygon = []; markMouse = null;
+        markCanvas.style.pointerEvents = "none";
+        markBtn.classList.remove("active");
+        redrawMark();
+    }
+
+    markBtn.addEventListener('click', function () {
+        if (regionActive || markDrawing) clearRegion();
+        else startMarking();
+    });
+    markCanvas.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+    markCanvas.addEventListener('click', function (e) {
+        if (!markDrawing) return;
+        e.stopPropagation();
+        var rect = markCanvas.getBoundingClientRect();
+        var sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+        if (regionPolygon.length >= 3) {            // click near the first vertex closes it
+            var first = imgToStage(regionPolygon[0]);
+            if (Math.hypot(sx - first.x, sy - first.y) <= 10) { finishMarking(); return; }
+        }
+        regionPolygon.push(stageToImg(sx, sy));
+        redrawMark();
+    });
+    markCanvas.addEventListener('mousemove', function (e) {
+        if (!markDrawing) return;
+        var rect = markCanvas.getBoundingClientRect();
+        markMouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        redrawMark();
+    });
+    markCanvas.addEventListener('dblclick', function (e) {
+        if (!markDrawing) return; e.stopPropagation(); finishMarking();
+    });
+    document.addEventListener('keydown', function (e) {
+        if (!markDrawing) return;
+        if (e.key === 'Enter')       { e.preventDefault(); finishMarking(); }
+        else if (e.key === 'Escape') { e.preventDefault(); clearRegion(); }
+    });
+    window.addEventListener('resize', function () {
+        if (currentDataUrl) { sizeMarkCanvas(); redrawMark(); }
+    });
+
+    // Produce { marked, mask } at the image's native resolution:
+    //   marked = the working image with the region painted on (sent to Gemini)
+    //   mask   = white polygon on black (for the Phase-2 inpainting backends)
+    function buildRegionImages(srcDataUrl, callback) {
+        var im = new Image();
+        im.onload = function () {
+            var IW = im.naturalWidth, IH = im.naturalHeight;
+            var c = document.createElement('canvas'); c.width = IW; c.height = IH;
+            var ctx = c.getContext('2d');
+            ctx.drawImage(im, 0, 0);
+            // Outline only (no fill) so the content inside the region — e.g. a
+            // window to keep — stays fully visible to the model.
+            tracePolygon(ctx, regionPolygon);
+            ctx.lineWidth = Math.max(3, IW / 220);
+            ctx.strokeStyle = "rgba(255,0,255,0.95)"; ctx.stroke();
+            var marked = c.toDataURL('image/png');
+
+            var m = document.createElement('canvas'); m.width = IW; m.height = IH;
+            var mx = m.getContext('2d');
+            mx.fillStyle = "#000"; mx.fillRect(0, 0, IW, IH);
+            tracePolygon(mx, regionPolygon); mx.fillStyle = "#fff"; mx.fill();
+
+            callback({ marked: marked, mask: m.toDataURL('image/png') });
+        };
+        im.onerror = function () { callback({ marked: srcDataUrl, mask: "" }); };
+        im.src = srcDataUrl;
+    }
+
+    // ---- send / render ------------------------------------------------
+    function doRender() {
+        var prompt = promptEl.value.trim();
+        if (!currentDataUrl) { setStatus("Capture a 3D view first.", true); return; }
+        if (!prompt) { setStatus("Enter an instruction for the AI.", true); return; }
+
+        isRendering = true;
+        overlay.style.display = "flex";
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = '<span class="btn-spinner"></span>Rendering…';
+        captureBtn.disabled = true;
+        setStatus("Image sent to server, processing…");
+
+        // A marked region edits only that area.  The payload depends on the
+        // active backend (we ask the host): Gemini gets the working image with
+        // the region painted on (it has no mask input); Local (SD WebUI) gets the
+        // CLEAN image plus a precise mask for true inpainting.
+        var providerProm = (window.ARUTILS && ARUTILS.GetProvider)
+            ? ARUTILS.GetProvider() : Promise.resolve("gemini");
+        providerProm.then(function (prov) {
+            if (regionActive && regionPolygon.length >= 3) {
+                buildRegionImages(currentDataUrl, function (imgs) {
+                    lastRegionMask = imgs.mask;
+                    if (prov === "local" || prov === "flux")
+                        sendRender(prompt, currentDataUrl, "", imgs.mask);      // precise mask (inpaint / Flux Fill)
+                    else
+                        sendRender(prompt + REGION_NOTE, imgs.marked, "", "");  // Gemini marker overlay
+                });
+            } else {
+                // The original capture is sent (when it differs from the working
+                // image) so the model has a full-quality source reference.
+                var originalArg = (iteration > 0 && originalDataUrl) ? originalDataUrl : "";
+                sendRender(prompt, currentDataUrl, originalArg, "");
+            }
+        });
+
+        // Fixed-position args: [prompt, workingImage, originalCapture, history, mask, ...userRefs]
+        function sendRender(fullPrompt, workingImage, originalArg, maskArg) {
+            var args = [fullPrompt, workingImage, originalArg, promptHistory.join(" | "), maskArg || ""];
+            for (var ri = 0; ri < referenceImages.length; ri++) {
+                args.push(referenceImages[ri]);
+            }
+
+            // The Render bridge call can tie up the UI thread while the request is
+            // in flight, so the browser would not repaint the "processing…" status
+            // and spinner until it returns.  Yield two animation frames first so the
+            // loading state is actually painted before the call starts.
+            requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+                ARUTILS.Render(args).then(function (result) {
+                    isRendering = false;
+                    overlay.style.display = "none";
+                    sendBtn.innerHTML = 'Send';
+                    sendBtn.disabled = false;
+                    captureBtn.disabled = false;       // instant feedback; the poll keeps it correct
+                    if (typeof result === "string" && result.indexOf("ERROR:") === 0) {
+                        setStatus(result.substring(6).trim(), true);
+                        promptEl.focus();
+                        return;
+                    }
+                    clearRegion();                     // the edit consumed the marked region
+                    promptHistory.push(prompt);        // record the (clean) prompt for future context
+                    addUsedPrompt(prompt);             // persistent reuse list (E2)
+                    history.push(result);              // record this step for undo
+                    if (history.length > maxHistory)   // bound memory; keep history[0] (the capture)
+                        history.splice(1, 1);
+                    applyWorkingState();               // sets current, slider, buttons
+                    saveBtn.disabled = false;
+                    promptEl.value = "";               // ready for the next instruction
+                    promptEl.focus();
+                    setStatus("Edit " + iteration + " done. Type another instruction to refine, " +
+                              "undo the last step, or drag the slider to compare.");
+                }).catch(function (err) {
+                    // Never leave the UI stuck if the bridge call rejects.
+                    isRendering = false;
+                    overlay.style.display = "none";
+                    sendBtn.innerHTML = 'Send';
+                    sendBtn.disabled = false;
+                    captureBtn.disabled = false;
+                    setStatus("Render failed: " + (err && err.message ? err.message : err), true);
+                });
+            });
+            });
+        }
+    }
+
+    sendBtn.addEventListener('click', function () {
+        if (!window.ARUTILS) return;
+        ARUTILS.HasApiKey().then(function (has) {
+            if (has) { doRender(); return; }
+            // No key yet: open settings, then render if the user added one.
+            ARUTILS.OpenSettings().then(function (nowHas) {
+                refreshProvider();
+                if (nowHas) doRender();
+                else {
+                    setStatus("An API key is required to render.", true);
+                    promptEl.focus();
+                }
+            });
+        });
+    });
+
+    // Click anywhere in the panel to restore focus to prompt.
+    document.getElementById('app').addEventListener('click', function (e) {
+        if (e.target !== promptEl && e.target.tagName !== 'BUTTON')
+            promptEl.focus();
+    });
+
+    // Allow Ctrl+Enter to send.
+    promptEl.addEventListener('keydown', function (e) {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendBtn.click(); }
+    });
+
+    // ---- reference image management -----------------------------------
+    function renderRefThumbs() {
+        refThumbs.innerHTML = '';
+        for (var i = 0; i < referenceImages.length; i++) {
+            (function (idx) {
+                var wrap = document.createElement('div');
+                wrap.className = 'ref-thumb-wrap';
+
+                var img = document.createElement('img');
+                img.src = referenceImages[idx];
+                img.title = 'Attachment ' + (idx + 1);
+
+                var badge = document.createElement('div');
+                badge.className = 'ref-thumb-index';
+                badge.textContent = (idx + 1);
+                badge.title = 'Attachment ' + (idx + 1);
+
+                var rm = document.createElement('button');
+                rm.className = 'ref-thumb-remove';
+                rm.textContent = '✕';
+                rm.title = 'Remove attachment ' + (idx + 1);
+                rm.addEventListener('click', function () {
+                    referenceImages.splice(idx, 1);
+                    renderRefThumbs();
+                });
+
+                wrap.appendChild(img);
+                wrap.appendChild(badge);
+                wrap.appendChild(rm);
+                refThumbs.appendChild(wrap);
+            })(i);
+        }
+        addRefBtn.disabled = referenceImages.length >= maxRefs;
+    }
+
+    function fileToDataUrl(file, callback) {
+        var reader = new FileReader();
+        reader.onload = function (e) { callback(e.target.result); };
+        reader.readAsDataURL(file);
+    }
+
+    // Re-encode an image data URL to JPEG at the given quality (0..1).
+    // Attachments are sent as JPEG to keep the upload small; the captured 3D
+    // image / original capture stay PNG (lossless) and are not routed here.
+    // JPEG has no alpha, so transparent source pixels are flattened onto white.
+    function toJpegDataUrl(srcDataUrl, quality, callback) {
+        var im = new Image();
+        im.onload = function () {
+            var c = document.createElement('canvas');
+            c.width  = im.naturalWidth  || im.width;
+            c.height = im.naturalHeight || im.height;
+            var ctx = c.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, c.width, c.height);
+            ctx.drawImage(im, 0, 0);
+            callback(c.toDataURL('image/jpeg', quality));
+        };
+        im.onerror = function () { callback(srcDataUrl); };   // fall back to original
+        im.src = srcDataUrl;
+    }
+
+    addRefBtn.addEventListener('click', function () {
+        if (referenceImages.length >= maxRefs) return;
+        refFileInput.value = '';   // reset so re-picking same file fires change
+        refFileInput.click();
+    });
+
+    refFileInput.addEventListener('change', function () {
+        if (!this.files || !this.files.length) return;
+        var files = Array.prototype.slice.call(this.files);
+        var remaining = maxRefs - referenceImages.length;
+        if (remaining <= 0) { this.value = ''; return; }
+        // take up to remaining
+        if (files.length > remaining) files.length = remaining;
+        var done = 0;
+        files.forEach(function (file) {
+            fileToDataUrl(file, function (url) {
+                // Attachments travel as JPEG (q0.9) to keep the request small.
+                toJpegDataUrl(url, 0.9, function (jpegUrl) {
+                    referenceImages.push(jpegUrl);
+                    done++;
+                    if (done === files.length) renderRefThumbs();
+                });
+            });
+        });
+        this.value = '';   // allow re-picking
+    });
+
+    // ---- save image to disk -------------------------------------------
+    saveBtn.addEventListener('click', function () {
+        if (!currentDataUrl) return;
+        ARUTILS.SaveImage(currentDataUrl).then(function (ok) {
+            if (!ok) setStatus("Save cancelled.");
+        });
+    });
+
+    // ---- provider badge (B6) ------------------------------------------
+    var providerBadge = document.getElementById('providerBadge');
+    function providerLabel(p) {
+        if (p === 'flux')  return 'Flux';
+        if (p === 'local') return 'Local';
+        return 'Gemini';
+    }
+    function refreshProvider() {
+        if (!window.ARUTILS || !ARUTILS.GetProvider) return;
+        ARUTILS.GetProvider().then(function (p) {
+            var label = providerLabel(p);
+            providerBadge.innerHTML = '<span class="dot"></span>' + label;
+            providerBadge.title = 'Active AI provider: ' + label + ' — change in ⚙';
+        });
+    }
+
+    // ---- collapsible prompt-tool panels (shared) ----------------------
+    var tmplToggle = document.getElementById('tmplToggle');
+    var tmplPanel  = document.getElementById('tmplPanel');
+    var tmplApply  = document.getElementById('tmplApply');
+    var tmplStyle  = document.getElementById('tmplStyle');
+    var tmplTime   = document.getElementById('tmplTime');
+    var tmplWeather= document.getElementById('tmplWeather');
+    var tmplCamera = document.getElementById('tmplCamera');
+    var histToggle = document.getElementById('histToggle');
+    var histPanel  = document.getElementById('histPanel');
+    var histList   = document.getElementById('histList');
+    var histClear  = document.getElementById('histClear');
+    var enhanceBtn = document.getElementById('enhanceBtn');
+
+    // Open `panel`, closing the sibling so only one is visible at a time.
+    function openExclusive(panel, btn, otherPanel, otherBtn) {
+        var show = panel.classList.contains('collapsed');
+        otherPanel.classList.add('collapsed');
+        otherBtn.classList.remove('active');
+        panel.classList.toggle('collapsed', !show);
+        btn.classList.toggle('active', show);
+        return show;
+    }
+
+    // ---- E1: smart prompt templates -----------------------------------
+    // Compose a prompt fragment from the chosen presets. Selecting nothing still
+    // yields a sensible photorealistic base. The result is *appended* to the
+    // textarea, so any custom free text the user typed is preserved and editable.
+    function buildTemplate() {
+        var parts = [];
+        var lead = "Photorealistic architectural photography";
+        if (tmplStyle.value) lead += " of " + tmplStyle.value;
+        parts.push(lead);
+        if (tmplTime.value)    parts.push(tmplTime.value);
+        if (tmplWeather.value) parts.push(tmplWeather.value);
+        if (tmplCamera.value)  parts.push(tmplCamera.value);
+        return parts.join(", ") + ". Keep all architectural geometry exactly as in the input image.";
+    }
+    tmplToggle.addEventListener('click', function () {
+        openExclusive(tmplPanel, tmplToggle, histPanel, histToggle);
+    });
+    tmplApply.addEventListener('click', function () {
+        var frag = buildTemplate();
+        var cur = promptEl.value.trim();
+        promptEl.value = cur ? (cur + " " + frag) : frag;
+        promptEl.focus();
+        setStatus("Template inserted — edit freely, then press Send.");
+    });
+
+    // ---- E2: prompt history (persistent reuse list) -------------------
+    // Distinct from `promptHistory` (the AI-context list cleared on undo/reset):
+    // this survives reset/undo and, when storage is available, across sessions.
+    var usedPrompts = [];
+    var HIST_KEY = 'bimrender.promptHistory';
+    var HIST_MAX = 20;
+    function loadUsedPrompts() {
+        try {
+            var raw = window.localStorage ? localStorage.getItem(HIST_KEY) : null;
+            if (raw) usedPrompts = JSON.parse(raw) || [];
+        } catch (e) { usedPrompts = []; }
+    }
+    function saveUsedPrompts() {
+        try { if (window.localStorage) localStorage.setItem(HIST_KEY, JSON.stringify(usedPrompts)); }
+        catch (e) { /* storage unavailable in this host -> session-only */ }
+    }
+    function addUsedPrompt(text) {
+        text = (text || "").trim();
+        if (!text) return;
+        usedPrompts = usedPrompts.filter(function (p) { return p !== text; });
+        usedPrompts.unshift(text);
+        if (usedPrompts.length > HIST_MAX) usedPrompts.length = HIST_MAX;
+        saveUsedPrompts();
+        if (!histPanel.classList.contains('collapsed')) renderHistList();
+    }
+    function renderHistList() {
+        histList.innerHTML = '';
+        if (usedPrompts.length === 0) {
+            var empty = document.createElement('div');
+            empty.id = 'histEmpty';
+            empty.textContent = 'No prompts yet — your sent prompts will appear here.';
+            histList.appendChild(empty);
+            return;
+        }
+        usedPrompts.forEach(function (text) {
+            var item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'hist-item';
+            item.textContent = text;
+            item.title = text;
+            item.addEventListener('click', function () {
+                promptEl.value = text;
+                promptEl.focus();
+                openExclusive(histPanel, histToggle, tmplPanel, tmplToggle); // close after pick
+                setStatus("Prompt loaded from history.");
+            });
+            histList.appendChild(item);
+        });
+    }
+    histToggle.addEventListener('click', function () {
+        if (openExclusive(histPanel, histToggle, tmplPanel, tmplToggle)) renderHistList();
+    });
+    histClear.addEventListener('click', function () {
+        usedPrompts = [];
+        saveUsedPrompts();
+        renderHistList();
+        setStatus("Prompt history cleared.");
+    });
+
+    // ---- E3: enhance prompt via Gemini text ---------------------------
+    var enhancing = false;
+    enhanceBtn.addEventListener('click', function () {
+        if (enhancing) return;
+        if (!window.ARUTILS || !ARUTILS.EnhancePrompt) { setStatus("Enhance is unavailable.", true); return; }
+        var text = promptEl.value.trim();
+        if (!text) { setStatus("Type a brief prompt to enhance.", true); promptEl.focus(); return; }
+
+        enhancing = true;
+        enhanceBtn.disabled = true;
+        var oldHtml = enhanceBtn.innerHTML;
+        enhanceBtn.innerHTML = '<span class="btn-spinner-dark"></span>Enhancing…';
+        setStatus("Enhancing prompt with Gemini…");
+
+        function restore() { enhancing = false; enhanceBtn.disabled = false; enhanceBtn.innerHTML = oldHtml; }
+        ARUTILS.EnhancePrompt(text).then(function (result) {
+            restore();
+            if (typeof result === "string" && result.indexOf("ERROR:") === 0) {
+                setStatus(result.substring(6).trim(), true);
+                return;
+            }
+            promptEl.value = (result || "").trim();
+            promptEl.focus();
+            setStatus("Prompt enhanced — review it, then press Send.");
+        }).catch(function (err) {
+            restore();
+            setStatus("Enhance failed: " + (err && err.message ? err.message : err), true);
+        });
+    });
+
+    loadUsedPrompts();
+    refreshProvider();
+    refreshThreeD();
+})();
+</script>
+</body>
+</html>
