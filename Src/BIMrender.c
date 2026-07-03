@@ -97,10 +97,12 @@ GSErrCode RegisterInterface (void)
 	if (DBERROR (err != NoError))
 		return err;
 
-	// The 3D capture runs as a module command posted to the event loop, because
-	// ACAPI_ProjectOperation_Save is refused inside browser JS bridge callbacks
-	// (APIERR_REFUSEDCMD on macOS). See Capture3D.hpp.
-	err = ACAPI_AddOnAddOnCommunication_RegisterSupportedService (NanoBanana::CaptureCmdID, NanoBanana::CaptureCmdVersion);
+	// The 3D capture, the settings dialog and the save dialog run as a module
+	// command posted to the event loop, because inside browser JS bridge
+	// callbacks the picture export is refused (APIERR_REFUSEDCMD) and modal
+	// dialogs crash (nested event loop in a blocked CEF IPC call). See
+	// Capture3D.hpp.
+	err = ACAPI_AddOnAddOnCommunication_RegisterSupportedService (NanoBanana::DeferredCmdID, NanoBanana::DeferredCmdVersion);
 	if (DBERROR (err != NoError))
 		return err;
 
@@ -117,8 +119,8 @@ GSErrCode Initialize (void)
 	if (DBERROR (err != NoError))
 		return err;
 
-	err = ACAPI_AddOnIntegration_InstallModulCommandHandler (NanoBanana::CaptureCmdID, NanoBanana::CaptureCmdVersion,
-	                                                         NanoBanana::CaptureCommandHandler);
+	err = ACAPI_AddOnIntegration_InstallModulCommandHandler (NanoBanana::DeferredCmdID, NanoBanana::DeferredCmdVersion,
+	                                                         NanoBanana::DeferredCommandHandler);
 	if (DBERROR (err != NoError))
 		return err;
 

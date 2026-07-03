@@ -16,15 +16,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the page parses them with an `asBool()` helper that also accepts real
   booleans ([nanoBanana.html](RFIX/nanoBanana.html)), keeping Windows
   behaviour unchanged.
-- Capturing failed with `APIERR_REFUSEDCMD` because
-  `ACAPI_ProjectOperation_Save` may not be called from a browser JS bridge
-  callback ("notification level"). The capture now runs as a module command
-  (`NanoBanana::CaptureCommandHandler`, registered in
+- Capturing failed with `APIERR_REFUSEDCMD` and saving the rendered image
+  (or opening the settings dialog) could crash Archicad: neither the picture
+  export nor a modal dialog may run inside a browser JS bridge callback (a
+  modal dialog there nests an event loop inside a blocked CEF IPC call).
+  These operations now run as a deferred module command
+  (`NanoBanana::DeferredCommandHandler`, registered in
   [BIMrender.c](Src/BIMrender.c)) posted to the main event loop via
-  `ACAPI_AddOnAddOnCommunication_CallFromEventLoop`; the page starts it with
-  `Capture3D` and polls `GetCaptureResult` until the data URL (or an error)
-  arrives, giving up with a clear error after 15 seconds
+  `ACAPI_AddOnAddOnCommunication_CallFromEventLoop`; the page starts them
+  with `Capture3D` / `SaveImage` / `OpenSettings` and polls `GetAsyncResult`
+  until the result arrives (capture gives up with a clear error after 15
+  seconds; the dialogs have no timeout)
   ([Capture3D.cpp](Src/NanoBanana/Capture3D.cpp),
+  [NanoBananaPanel.cpp](Src/Common/NanoBananaPanel.cpp),
   [nanoBanana.html](RFIX/nanoBanana.html)). Note: the Demo version of
   Archicad refuses every save operation with the same error — the panel now
   reports this case explicitly ("The Demo version cannot save; a full license

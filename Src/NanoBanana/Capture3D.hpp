@@ -6,6 +6,8 @@
 #include "GSRoot.hpp"
 #include "UniString.hpp"
 
+#include <functional>
+
 namespace NanoBanana {
 
 // True when the currently active window is the 3D model window.
@@ -22,27 +24,32 @@ bool Is3DWindowActive ();
 // callback. Use the asynchronous flow below from such contexts.
 GS::UniString CaptureCurrent3DAsDataUrl (GSErrCode* saveErrOut = nullptr);
 
-// --- asynchronous capture ---------------------------------------------------
-// The JS bridge can't capture directly (see above), so it schedules the
-// capture as a module command executed from the main event loop:
-//   1. StartAsyncCapture() posts the command (CaptureCmdID) via
-//      ACAPI_AddOnAddOnCommunication_CallFromEventLoop.
-//   2. CaptureCommandHandler() — installed in Initialize() — runs in command
-//      context and stores the result.
-//   3. The page polls FetchCaptureResult() until it stops returning "PENDING".
+// --- deferred tasks ----------------------------------------------------------
+// Work that is illegal inside a browser JS bridge callback — the picture
+// export above, and anything opening a modal dialog (settings, the native
+// save dialog), which nests an event loop inside a blocked CEF IPC call and
+// crashes — is executed as a module command from the main event loop instead:
+//   1. StartDeferredTask() stores the task and posts the command
+//      (DeferredCmdID) via ACAPI_AddOnAddOnCommunication_CallFromEventLoop.
+//   2. DeferredCommandHandler() — installed in Initialize() — runs it in
+//      command context and stores its result string.
+//   3. The page polls FetchDeferredResult() until it stops returning
+//      "PENDING".
+// One task can be in flight at a time; StartDeferredTask refuses a second.
 
-const GSType CaptureCmdID      = 'NBCP';
-const Int32  CaptureCmdVersion = 1;
+const GSType DeferredCmdID      = 'NBDF';
+const Int32  DeferredCmdVersion = 1;
 
-// Schedules the capture; returns false if the command could not be posted.
-bool StartAsyncCapture ();
+// Schedules the task; returns false if one is already running or the
+// command could not be posted.
+bool StartDeferredTask (const std::function<GS::UniString ()>& task);
 
-// "PENDING" while the capture is in flight; then (one-shot) the data URL,
-// or "ERROR: <msg>" on failure; "" when no capture is active.
-GS::UniString FetchCaptureResult ();
+// "PENDING" while the task is in flight; then (one-shot) its result;
+// "" when no task is active.
+GS::UniString FetchDeferredResult ();
 
 // Module command entry point (APIModulCommandProc).
-GSErrCode CaptureCommandHandler (GSHandle params, GSPtr resultData, bool silentMode);
+GSErrCode DeferredCommandHandler (GSHandle params, GSPtr resultData, bool silentMode);
 
 } // namespace NanoBanana
 

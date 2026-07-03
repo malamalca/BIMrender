@@ -110,61 +110,56 @@ GS::UniString CaptureCurrent3DAsDataUrl (GSErrCode* saveErrOut)
 }
 
 // ---------------------------------------------------------------------------
-// Asynchronous capture via a module command (see Capture3D.hpp).
-// All of this runs on the main thread: StartAsyncCapture / FetchCaptureResult
+// Deferred tasks via a module command (see Capture3D.hpp).
+// All of this runs on the main thread: StartDeferredTask / FetchDeferredResult
 // are called from the JS bridge (main thread on macOS, marshalled there by
-// RunOnMainThread otherwise) and CaptureCommandHandler from the event loop.
+// RunOnMainThread otherwise) and DeferredCommandHandler from the event loop.
 // ---------------------------------------------------------------------------
-static GS::UniString captureResult;
-static bool          capturePending = false;
+static std::function<GS::UniString ()> deferredTask;
+static GS::UniString                   deferredResult;
+static bool                            deferredPending = false;
 
-bool StartAsyncCapture ()
+bool StartDeferredTask (const std::function<GS::UniString ()>& task)
 {
-    if (capturePending)
-        return true;                       // a capture is already in flight
+    if (deferredPending)
+        return false;                      // one task at a time
 
-    capturePending = true;
-    captureResult.Clear ();
+    deferredPending = true;
+    deferredTask    = task;
+    deferredResult.Clear ();
 
     API_ModulID mdid = {};                 // our own 'MDID' resource values
     mdid.developerID = 1211329892;
     mdid.localID     = 439119418;
 
     const GSErrCode err = ACAPI_AddOnAddOnCommunication_CallFromEventLoop (
-        &mdid, CaptureCmdID, CaptureCmdVersion, nullptr, false, nullptr);
+        &mdid, DeferredCmdID, DeferredCmdVersion, nullptr, false, nullptr);
 
     if (err != NoError) {
-        capturePending = false;
+        deferredPending = false;
+        deferredTask    = nullptr;
         return false;
     }
     return true;
 }
 
-GS::UniString FetchCaptureResult ()
+GS::UniString FetchDeferredResult ()
 {
-    if (capturePending)
+    if (deferredPending)
         return GS::UniString ("PENDING");
 
-    GS::UniString result = captureResult;
-    captureResult.Clear ();                // one-shot
+    GS::UniString result = deferredResult;
+    deferredResult.Clear ();               // one-shot
     return result;
 }
 
-GSErrCode CaptureCommandHandler (GSHandle /*params*/, GSPtr /*resultData*/, bool /*silentMode*/)
+GSErrCode DeferredCommandHandler (GSHandle /*params*/, GSPtr /*resultData*/, bool /*silentMode*/)
 {
-    GSErrCode saveErr = NoError;
-    captureResult = CaptureCurrent3DAsDataUrl (&saveErr);
-    if (captureResult.IsEmpty ()) {
-        // APIERR_REFUSEDCMD from the picture export in a clean command context
-        // means Archicad itself refuses to save — the documented case is the
-        // Demo version, which cannot save anything.
-        if (saveErr == APIERR_REFUSEDCMD)
-            captureResult = "ERROR: Archicad refused to export the view. "
-                            "The Demo version cannot save; a full license is required.";
-        else
-            captureResult = "ERROR: Could not capture. Make sure the 3D window is active.";
+    if (deferredTask != nullptr) {
+        deferredResult = deferredTask ();
+        deferredTask   = nullptr;
     }
-    capturePending = false;
+    deferredPending = false;
     return NoError;
 }
 

@@ -399,6 +399,22 @@
     // accept both.
     function asBool(v) { return v === true || v === "true"; }
 
+    // Capture3D / SaveImage / OpenSettings only *start* their work (the host
+    // runs it deferred on the event loop, where saving and modal dialogs are
+    // allowed); the outcome is picked up by polling GetAsyncResult until it
+    // stops returning "PENDING". timeoutMs of 0 disables the timeout (used
+    // for user-driven dialogs that may stay open indefinitely).
+    function pollTask(done, timeoutMs) {
+        var start = Date.now();
+        (function loop() {
+            if (timeoutMs && Date.now() - start > timeoutMs) { done("ERROR: timed out"); return; }
+            ARUTILS.GetAsyncResult().then(function (res) {
+                if (res === "PENDING") { setTimeout(loop, 150); return; }
+                done(res);
+            });
+        })();
+    }
+
     function refreshThreeD() {
         if (!window.ARUTILS) return;   // host bridge not injected yet; poll will retry
         if (isRendering) return;       // don't re-enable capture during a render
@@ -493,18 +509,6 @@
         setStatus("Captured. Enter an instruction and press Send.");
     }
 
-    var capturePollStart = 0;
-    function pollCaptureResult() {
-        if (Date.now() - capturePollStart > 15000) {   // safety net: never hang forever
-            finishCapture("ERROR: capture timed out");
-            return;
-        }
-        ARUTILS.GetCaptureResult().then(function (res) {
-            if (res === "PENDING") { setTimeout(pollCaptureResult, 150); return; }
-            finishCapture(res);
-        });
-    }
-
     captureBtn.addEventListener('click', function () {
         if (capturing) return;
         capturing = true;
@@ -515,8 +519,7 @@
                 setStatus("Could not capture. Make sure the 3D window is active.", true);
                 return;
             }
-            capturePollStart = Date.now();
-            pollCaptureResult();
+            pollTask(finishCapture, 15000);
         });
     });
 
@@ -567,7 +570,10 @@
 
     // ---- settings -----------------------------------------------------
     settingsBtn.addEventListener('click', function () {
-        ARUTILS.OpenSettings().then(function () { refreshProvider(); });
+        ARUTILS.OpenSettings().then(function (started) {
+            if (!asBool(started)) return;
+            pollTask(function () { refreshProvider(); }, 0);
+        });
     });
 
     // ---- region marquee (mark an area to edit) ------------------------
@@ -813,13 +819,16 @@
         ARUTILS.HasApiKey().then(function (has) {
             if (asBool(has)) { doRender(); return; }
             // No key yet: open settings, then render if the user added one.
-            ARUTILS.OpenSettings().then(function (nowHas) {
-                refreshProvider();
-                if (asBool(nowHas)) doRender();
-                else {
-                    setStatus("An API key is required to render.", true);
-                    promptEl.focus();
-                }
+            ARUTILS.OpenSettings().then(function (started) {
+                if (!asBool(started)) return;
+                pollTask(function (nowHas) {
+                    refreshProvider();
+                    if (nowHas === "true") doRender();
+                    else {
+                        setStatus("An API key is required to render.", true);
+                        promptEl.focus();
+                    }
+                }, 0);
             });
         });
     });
@@ -926,8 +935,11 @@
     // ---- save image to disk -------------------------------------------
     saveBtn.addEventListener('click', function () {
         if (!currentDataUrl) return;
-        ARUTILS.SaveImage(currentDataUrl).then(function (ok) {
-            if (!asBool(ok)) setStatus("Save cancelled.");
+        ARUTILS.SaveImage(currentDataUrl).then(function (started) {
+            if (!asBool(started)) { setStatus("Could not open the save dialog.", true); return; }
+            pollTask(function (res) {
+                if (res !== "true") setStatus("Save cancelled.");
+            }, 0);   // no timeout: the dialog may stay open indefinitely
         });
     });
 

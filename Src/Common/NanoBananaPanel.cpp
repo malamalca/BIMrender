@@ -223,19 +223,34 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
     }));
 
     // Start capturing the current 3D view -> "true" | "false" (started?).
-    // The capture itself runs as a module command from the event loop, because
+    // The capture runs as a deferred task from the event loop, because
     // ACAPI_ProjectOperation_Save is refused inside this bridge callback
-    // (APIERR_REFUSEDCMD). The page polls GetCaptureResult for the outcome.
+    // (APIERR_REFUSEDCMD). The page polls GetAsyncResult for the outcome.
     jsACAPI->AddItem (new JS::Function ("Capture3D", [boolValue] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
         bool started = false;
-        RunOnMainThread ([&] { started = NanoBanana::StartAsyncCapture (); });
+        RunOnMainThread ([&] {
+            started = NanoBanana::StartDeferredTask ([] () -> GS::UniString {
+                GSErrCode saveErr = NoError;
+                GS::UniString dataUrl = NanoBanana::CaptureCurrent3DAsDataUrl (&saveErr);
+                if (!dataUrl.IsEmpty ())
+                    return dataUrl;
+                // APIERR_REFUSEDCMD from the picture export in command context
+                // means Archicad itself refuses to save — the documented case
+                // is the Demo version, which cannot save anything.
+                if (saveErr == APIERR_REFUSEDCMD)
+                    return GS::UniString ("ERROR: Archicad refused to export the view. "
+                                          "The Demo version cannot save; a full license is required.");
+                return GS::UniString ("ERROR: Could not capture. Make sure the 3D window is active.");
+            });
+        });
         return boolValue (started);
     }));
 
-    // Poll the async capture -> "PENDING" | "data:image/png;base64,..." | "ERROR: <msg>" | ""
-    jsACAPI->AddItem (new JS::Function ("GetCaptureResult", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
+    // Poll the pending deferred task (capture / save / settings)
+    // -> "PENDING" | task result | "" (no task active)
+    jsACAPI->AddItem (new JS::Function ("GetAsyncResult", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
         GS::UniString result;
-        RunOnMainThread ([&] { result = NanoBanana::FetchCaptureResult (); });
+        RunOnMainThread ([&] { result = NanoBanana::FetchDeferredResult (); });
         return new JS::Value (result);
     }));
 
@@ -258,14 +273,19 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
         }
     }));
 
-    // Open the settings dialog -> "true" if the active provider is now configured
+    // Open the settings dialog -> "true" | "false" (started?). Runs deferred:
+    // a modal dialog opened inside this callback nests an event loop in a
+    // blocked CEF IPC call and crashes. The page polls GetAsyncResult; the
+    // task result is "true" when the active provider is configured.
     jsACAPI->AddItem (new JS::Function ("OpenSettings", [boolValue] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
-        bool configured = false;
+        bool started = false;
         RunOnMainThread ([&] {
-            ShowNanoBananaSettingsDialog ();
-            configured = NanoBanana::IsConfigured ();
+            started = NanoBanana::StartDeferredTask ([] () -> GS::UniString {
+                ShowNanoBananaSettingsDialog ();
+                return GS::UniString (NanoBanana::IsConfigured () ? "true" : "false");
+            });
         });
-        return boolValue (configured);
+        return boolValue (started);
     }));
 
     // Render: params = [prompt, mainImage, originalCapture?, userRef1?, ...] -> new data URL, or "ERROR: <msg>"
@@ -315,11 +335,18 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
         return new JS::Value (GS::UniString ("ERROR: ") + errMsg);
     }));
 
-    // Save a data URL image to disk via native save dialog -> "true" if saved
+    // Save a data URL image to disk -> "true" | "false" (started?). Runs
+    // deferred for the same reason as OpenSettings (native modal save dialog).
+    // The page polls GetAsyncResult; the task result is "true" when saved.
     jsACAPI->AddItem (new JS::Function ("SaveImage", [boolValue] (GS::Ref<JS::Base> params) -> GS::Ref<JS::Base> {
-        bool saved = false;
-        RunOnMainThread ([&] { saved = SaveDataUrlToFile (GetStringParam (params)); });
-        return boolValue (saved);
+        const GS::UniString dataUrl = GetStringParam (params);
+        bool started = false;
+        RunOnMainThread ([&] {
+            started = NanoBanana::StartDeferredTask ([dataUrl] () -> GS::UniString {
+                return GS::UniString (SaveDataUrlToFile (dataUrl) ? "true" : "false");
+            });
+        });
+        return boolValue (started);
     }));
 
     // Expand a brief prompt into a detailed one via a Gemini text model.
