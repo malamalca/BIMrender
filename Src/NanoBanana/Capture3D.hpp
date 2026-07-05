@@ -40,9 +40,22 @@ GS::UniString CaptureCurrent3DAsDataUrl (GSErrCode* saveErrOut = nullptr);
 const GSType DeferredCmdID      = 'NBDF';
 const Int32  DeferredCmdVersion = 1;
 
-// Schedules the task; returns false if one is already running or the
-// command could not be posted.
-bool StartDeferredTask (const std::function<GS::UniString ()>& task);
+// Schedules the task as a module command — full ACAPI command context, used
+// by the 3D capture. Returns an empty string on success, otherwise an
+// "ERROR: <reason>" text suitable for the panel status line (another task
+// still running, or the event-loop post failed). A pending task that never
+// dispatched is abandoned after 30 seconds so one hiccup can't block every
+// later operation.
+GS::UniString StartDeferredTask (const std::function<GS::UniString ()>& task);
+
+// Schedules the task as a plain message-loop post (GS::MessageLoopExecutor,
+// asynchronous). Used for work that opens modal dialogs (settings, native
+// save dialog): dialogs need no ACAPI command context, and a DG modal dialog
+// invoked from inside the module-command handler never becomes visible on
+// macOS — its modal loop runs with a window that never appears, blocking
+// everything. A plain run-loop iteration outside the CEF callback stack
+// shows them normally. Same result/pending plumbing as StartDeferredTask.
+GS::UniString StartDeferredUiTask (const std::function<GS::UniString ()>& task);
 
 // "PENDING" while the task is in flight; then (one-shot) its result;
 // "" when no task is active.
@@ -50,6 +63,9 @@ GS::UniString FetchDeferredResult ();
 
 // Module command entry point (APIModulCommandProc).
 GSErrCode DeferredCommandHandler (GSHandle params, GSPtr resultData, bool silentMode);
+
+// TEMPORARY diagnostics for the missing settings dialog; remove once fixed.
+void NbDebugLog (const char* msg, long a = 0);
 
 } // namespace NanoBanana
 

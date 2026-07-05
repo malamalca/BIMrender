@@ -399,17 +399,29 @@
     // accept both.
     function asBool(v) { return v === true || v === "true"; }
 
+    // Start* bridge calls resolve with "true" or "ERROR: <reason>"; prefer
+    // the host's reason over a generic message when it provides one.
+    function startFailMsg(res, generic) {
+        return (typeof res === "string" && res.indexOf("ERROR:") === 0)
+            ? res.substring(6).trim() : generic;
+    }
+
     // Capture3D / SaveImage / OpenSettings only *start* their work (the host
     // runs it deferred on the event loop, where saving and modal dialogs are
     // allowed); the outcome is picked up by polling GetAsyncResult until it
     // stops returning "PENDING". timeoutMs of 0 disables the timeout (used
     // for user-driven dialogs that may stay open indefinitely).
+    // taskBusy debounces the buttons: the host runs one deferred task at a
+    // time, so further clicks are ignored instead of surfacing an error.
+    var taskBusy = false;
+
     function pollTask(done, timeoutMs) {
         var start = Date.now();
         (function loop() {
-            if (timeoutMs && Date.now() - start > timeoutMs) { done("ERROR: timed out"); return; }
+            if (timeoutMs && Date.now() - start > timeoutMs) { taskBusy = false; done("ERROR: timed out"); return; }
             ARUTILS.GetAsyncResult().then(function (res) {
                 if (res === "PENDING") { setTimeout(loop, 150); return; }
+                taskBusy = false;
                 done(res);
             });
         })();
@@ -510,13 +522,15 @@
     }
 
     captureBtn.addEventListener('click', function () {
-        if (capturing) return;
+        if (capturing || taskBusy) return;
         capturing = true;
+        taskBusy = true;
         setStatus("Capturing 3D view…");
         ARUTILS.Capture3D().then(function (started) {
             if (!asBool(started)) {
                 capturing = false;
-                setStatus("Could not capture. Make sure the 3D window is active.", true);
+                taskBusy = false;
+                setStatus(startFailMsg(started, "Could not capture. Make sure the 3D window is active."), true);
                 return;
             }
             pollTask(finishCapture, 15000);
@@ -570,8 +584,14 @@
 
     // ---- settings -----------------------------------------------------
     settingsBtn.addEventListener('click', function () {
+        if (taskBusy) return;
+        taskBusy = true;
         ARUTILS.OpenSettings().then(function (started) {
-            if (!asBool(started)) return;
+            if (!asBool(started)) {
+                taskBusy = false;
+                setStatus(startFailMsg(started, "Could not open settings."), true);
+                return;
+            }
             pollTask(function () { refreshProvider(); }, 0);
         });
     });
@@ -819,8 +839,14 @@
         ARUTILS.HasApiKey().then(function (has) {
             if (asBool(has)) { doRender(); return; }
             // No key yet: open settings, then render if the user added one.
+            if (taskBusy) return;
+            taskBusy = true;
             ARUTILS.OpenSettings().then(function (started) {
-                if (!asBool(started)) return;
+                if (!asBool(started)) {
+                    taskBusy = false;
+                    setStatus(startFailMsg(started, "Could not open settings."), true);
+                    return;
+                }
                 pollTask(function (nowHas) {
                     refreshProvider();
                     if (nowHas === "true") doRender();
@@ -934,9 +960,14 @@
 
     // ---- save image to disk -------------------------------------------
     saveBtn.addEventListener('click', function () {
-        if (!currentDataUrl) return;
+        if (!currentDataUrl || taskBusy) return;
+        taskBusy = true;
         ARUTILS.SaveImage(currentDataUrl).then(function (started) {
-            if (!asBool(started)) { setStatus("Could not open the save dialog.", true); return; }
+            if (!asBool(started)) {
+                taskBusy = false;
+                setStatus(startFailMsg(started, "Could not open the save dialog."), true);
+                return;
+            }
             pollTask(function (res) {
                 if (res !== "true") setStatus("Save cancelled.");
             }, 0);   // no timeout: the dialog may stay open indefinitely

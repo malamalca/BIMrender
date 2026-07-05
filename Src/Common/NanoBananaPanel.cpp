@@ -122,6 +122,7 @@ static bool SaveDataUrlToFile (const GS::UniString& dataUrl)
     const std::string decoded = NanoBanana::Base64Decode (utf8B64);
 
     // Show save dialog using DG::FileDialog.
+    NanoBanana::NbDebugLog ("save: decoded %ld bytes, opening dialog", (long) decoded.size ());
     DG::FileDialog fileDialog (DG::FileDialog::Save);
 
     fileDialog.AddFilter (FTM::JPEGFileType, DG::FileDialog::SystemDefault);
@@ -133,7 +134,9 @@ static bool SaveDataUrlToFile (const GS::UniString& dataUrl)
     IO::Location defLoc (defaultName);
     fileDialog.SelectFile (defLoc, false);
 
-    if (!fileDialog.Invoke ())
+    const bool invoked = fileDialog.Invoke ();
+    NanoBanana::NbDebugLog ("save: dialog returned %ld", (long) (invoked ? 1 : 0));
+    if (!invoked)
         return false;
 
     const IO::Location& selectedFile = fileDialog.GetSelectedFile (0);
@@ -226,10 +229,12 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
     // The capture runs as a deferred task from the event loop, because
     // ACAPI_ProjectOperation_Save is refused inside this bridge callback
     // (APIERR_REFUSEDCMD). The page polls GetAsyncResult for the outcome.
-    jsACAPI->AddItem (new JS::Function ("Capture3D", [boolValue] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
-        bool started = false;
+    // Start* results: "true" when the deferred task was scheduled, otherwise
+    // an "ERROR: <reason>" text the page shows in the status line.
+    jsACAPI->AddItem (new JS::Function ("Capture3D", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
+        GS::UniString startErr;
         RunOnMainThread ([&] {
-            started = NanoBanana::StartDeferredTask ([] () -> GS::UniString {
+            startErr = NanoBanana::StartDeferredTask ([] () -> GS::UniString {
                 GSErrCode saveErr = NoError;
                 GS::UniString dataUrl = NanoBanana::CaptureCurrent3DAsDataUrl (&saveErr);
                 if (!dataUrl.IsEmpty ())
@@ -243,7 +248,7 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
                 return GS::UniString ("ERROR: Could not capture. Make sure the 3D window is active.");
             });
         });
-        return boolValue (started);
+        return new JS::Value (startErr.IsEmpty () ? GS::UniString ("true") : startErr);
     }));
 
     // Poll the pending deferred task (capture / save / settings)
@@ -273,19 +278,23 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
         }
     }));
 
-    // Open the settings dialog -> "true" | "false" (started?). Runs deferred:
-    // a modal dialog opened inside this callback nests an event loop in a
-    // blocked CEF IPC call and crashes. The page polls GetAsyncResult; the
-    // task result is "true" when the active provider is configured.
-    jsACAPI->AddItem (new JS::Function ("OpenSettings", [boolValue] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
-        bool started = false;
+    // Open the settings dialog -> "true" | "ERROR: <reason>" (started?).
+    // Runs as a message-loop UI task: opened inline here it crashes (nested
+    // event loop in a blocked CEF IPC call), and opened inside the module
+    // command it never becomes visible on macOS. The page polls
+    // GetAsyncResult; the task result is "true" when the active provider is
+    // configured.
+    jsACAPI->AddItem (new JS::Function ("OpenSettings", [] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
+        GS::UniString startErr;
         RunOnMainThread ([&] {
-            started = NanoBanana::StartDeferredTask ([] () -> GS::UniString {
-                ShowNanoBananaSettingsDialog ();
+            startErr = NanoBanana::StartDeferredUiTask ([] () -> GS::UniString {
+                NanoBanana::NbDebugLog ("settings task: invoking dialog");
+                const bool ok = ShowNanoBananaSettingsDialog ();
+                NanoBanana::NbDebugLog ("settings task: dialog returned %ld", (long) (ok ? 1 : 0));
                 return GS::UniString (NanoBanana::IsConfigured () ? "true" : "false");
             });
         });
-        return boolValue (started);
+        return new JS::Value (startErr.IsEmpty () ? GS::UniString ("true") : startErr);
     }));
 
     // Render: params = [prompt, mainImage, originalCapture?, userRef1?, ...] -> new data URL, or "ERROR: <msg>"
@@ -335,18 +344,19 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
         return new JS::Value (GS::UniString ("ERROR: ") + errMsg);
     }));
 
-    // Save a data URL image to disk -> "true" | "false" (started?). Runs
-    // deferred for the same reason as OpenSettings (native modal save dialog).
-    // The page polls GetAsyncResult; the task result is "true" when saved.
-    jsACAPI->AddItem (new JS::Function ("SaveImage", [boolValue] (GS::Ref<JS::Base> params) -> GS::Ref<JS::Base> {
+    // Save a data URL image to disk -> "true" | "ERROR: <reason>" (started?).
+    // Runs as a message-loop UI task for the same reason as OpenSettings
+    // (native modal save dialog). The page polls GetAsyncResult; the task
+    // result is "true" when saved.
+    jsACAPI->AddItem (new JS::Function ("SaveImage", [] (GS::Ref<JS::Base> params) -> GS::Ref<JS::Base> {
         const GS::UniString dataUrl = GetStringParam (params);
-        bool started = false;
+        GS::UniString startErr;
         RunOnMainThread ([&] {
-            started = NanoBanana::StartDeferredTask ([dataUrl] () -> GS::UniString {
+            startErr = NanoBanana::StartDeferredUiTask ([dataUrl] () -> GS::UniString {
                 return GS::UniString (SaveDataUrlToFile (dataUrl) ? "true" : "false");
             });
         });
-        return boolValue (started);
+        return new JS::Value (startErr.IsEmpty () ? GS::UniString ("true") : startErr);
     }));
 
     // Expand a brief prompt into a detailed one via a Gemini text model.

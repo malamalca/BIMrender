@@ -37,6 +37,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Error messages in the panel status line were overwritten by the 1-second
   availability poll after a moment ("flashing"); they now stay visible until
   the next user action.
+- When a deferred operation cannot start, the panel now shows the host's
+  actual reason (another operation still in progress, or the scheduling
+  error code) instead of a generic message, and a task stuck in the pending
+  state is abandoned after 30 seconds so it cannot block every subsequent
+  capture/save/settings operation.
 
 ### Changed
 - Misleading "not in 3D" guidance in the panel: the placeholder and status
