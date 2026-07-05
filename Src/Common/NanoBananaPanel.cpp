@@ -21,11 +21,12 @@
 
 #include "JSValues.hpp"
 
-#include <DGFileDialog.hpp>
 #include <Location.hpp>
 #include <File.hpp>
+#include <FileSystem.hpp>
 #include <MessageLoopExecutor.hpp>
 #include <FunctionRunnable.hpp>
+#include <cstdlib>
 #include <functional>
 #include <string>
 #include <thread>
@@ -89,19 +90,48 @@ static void GetRenderParams (GS::Ref<JS::Base> params,
         refs.Push (GetStringParam (items[i]));
 }
 
-static bool SaveDataUrlToFile (const GS::UniString& dataUrl)
+// Reveals the saved file in the OS file browser (best-effort; failures are
+// ignored). A native save *dialog* cannot be used here: opening DG::FileDialog
+// from the browser JS-bridge context deadlocks (deferred) or crashes Archicad
+// (inline) on macOS, so the image is auto-saved and then revealed instead.
+static void RevealInFileBrowser (const IO::Location& file)
+{
+    GS::UniString path;
+    if (file.ToPath (&path) != NoError)
+        return;
+
+    const std::string utf8 (path.ToCStr (0, MaxUSize, CC_UTF8).Get ());
+    // Wrap the path in single quotes and escape any embedded quote so paths with
+    // spaces or unicode survive the shell.
+    std::string quoted = "'";
+    for (char c : utf8)
+        quoted += (c == '\'') ? std::string ("'\\''") : std::string (1, c);
+    quoted += "'";
+
+#if defined (WINDOWS)
+    const std::string cmd = "explorer /select," + quoted;
+#else
+    const std::string cmd = "/usr/bin/open -R " + quoted;
+#endif
+    std::system (cmd.c_str ());
+}
+
+// Auto-saves the given image data URL into a "BIMrender" folder under the user's
+// Documents, without any modal dialog (see RevealInFileBrowser for why). Returns
+// the saved file's path on success, or an "ERROR: <reason>" string on failure.
+static GS::UniString SaveDataUrlToFile (const GS::UniString& dataUrl)
 {
     // Check "data:" prefix.
     if (dataUrl.GetLength () < 5)
-        return false;
+        return GS::UniString ("ERROR: No image to save.");
     GS::UniString prefix = dataUrl.GetSubstring (0, 5);
     if (prefix.Compare (GS::UniString ("data:")) != GS::UniString::Equal)
-        return false;
+        return GS::UniString ("ERROR: No image to save.");
 
     // Find comma separating header from base64 payload.
     const UIndex commaPos = dataUrl.FindFirst (',');
     if (commaPos == MaxUIndex)
-        return false;
+        return GS::UniString ("ERROR: The image data is malformed.");
     GS::UniString b64Str = dataUrl.GetSubstring (commaPos + 1, MaxUSize);
 
     // Determine file extension from mime type.
@@ -120,37 +150,54 @@ static bool SaveDataUrlToFile (const GS::UniString& dataUrl)
     // Decode base64 to binary.
     const std::string utf8B64 (b64Str.ToCStr (0, MaxUSize, CC_UTF8).Get ());
     const std::string decoded = NanoBanana::Base64Decode (utf8B64);
+    if (decoded.empty ())
+        return GS::UniString ("ERROR: The image could not be decoded.");
 
-    // Show save dialog using DG::FileDialog.
-    NanoBanana::NbDebugLog ("save: decoded %ld bytes, opening dialog", (long) decoded.size ());
-    DG::FileDialog fileDialog (DG::FileDialog::Save);
+    // Target folder: <Documents>/BIMrender (fall back to the temp folder).
+    IO::Location      folder;
+    API_SpecFolderID  specID = API_UserDocumentsFolderID;
+    if (ACAPI_ProjectSettings_GetSpecFolder (&specID, &folder) != NoError) {
+        specID = API_TemporaryFolderID;
+        if (ACAPI_ProjectSettings_GetSpecFolder (&specID, &folder) != NoError)
+            return GS::UniString ("ERROR: Could not locate a folder to save into.");
+    }
+    folder.AppendToLocal (IO::Name ("BIMrender"));
+    IO::fileSystem.CreateFolderTree (folder);   // no-op if it already exists
 
-    fileDialog.AddFilter (FTM::JPEGFileType, DG::FileDialog::SystemDefault);
-    UIndex pngIdx = fileDialog.AddFilter (FTM::UnknownType, DG::FileDialog::DisplayExtensions);
-    if (pngIdx != MaxUIndex)
-        fileDialog.SetFilterText (pngIdx, "PNG Images (*.png)");
+    // Pick a non-colliding name: ai_render.png, ai_render_1.png, ...
+    IO::Location outFileLoc;
+    for (Int32 n = 0; ; ++n) {
+        GS::UniString name = (n == 0)
+            ? GS::UniString ("ai_render") + ext
+            : GS::UniString::Printf ("ai_render_%d", (int) n) + ext;
+        outFileLoc = folder;
+        outFileLoc.AppendToLocal (IO::Name (name));
+        bool exists = false;
+        if (IO::fileSystem.Contains (outFileLoc, &exists) != NoError || !exists)
+            break;
+    }
 
-    GS::UniString defaultName = "ai_render" + ext;
-    IO::Location defLoc (defaultName);
-    fileDialog.SelectFile (defLoc, false);
-
-    const bool invoked = fileDialog.Invoke ();
-    NanoBanana::NbDebugLog ("save: dialog returned %ld", (long) (invoked ? 1 : 0));
-    if (!invoked)
-        return false;
-
-    const IO::Location& selectedFile = fileDialog.GetSelectedFile (0);
+    NanoBanana::NbDebugLog ("save: writing %ld bytes", (long) decoded.size ());
 
     // Write via IO::File so Unicode paths are handled correctly (a narrow
     // std::ofstream would mangle non-ASCII paths on Windows).
-    IO::File outFile (selectedFile, IO::File::Create);
+    IO::File outFile (outFileLoc, IO::File::Create);
     if (outFile.Open (IO::File::WriteEmptyMode) != NoError)
-        return false;
+        return GS::UniString ("ERROR: The file could not be created. Check the folder permissions.");
 
     USize written = 0;
     const GSErrCode err = outFile.WriteBin (decoded.data (), static_cast<USize> (decoded.size ()), &written);
     outFile.Close ();
-    return err == NoError && written == static_cast<USize> (decoded.size ());
+    if (err != NoError || written != static_cast<USize> (decoded.size ()))
+        return GS::UniString ("ERROR: The image could not be written to disk.");
+
+    RevealInFileBrowser (outFileLoc);
+
+    GS::UniString savedPath;
+    if (outFileLoc.ToPath (&savedPath) != NoError)
+        savedPath = outFileLoc.ToDisplayText ();
+    NanoBanana::NbDebugLog ("save: done");
+    return savedPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,19 +391,22 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
         return new JS::Value (GS::UniString ("ERROR: ") + errMsg);
     }));
 
-    // Save a data URL image to disk -> "true" | "ERROR: <reason>" (started?).
-    // Runs as a message-loop UI task for the same reason as OpenSettings
-    // (native modal save dialog). The page polls GetAsyncResult; the task
-    // result is "true" when saved.
+    // Auto-save a data URL image -> "SAVED:<path>" | "ERROR: <reason>".
+    // No modal save dialog: DG::FileDialog cannot be opened from this browser
+    // JS-bridge context on macOS (it deadlocks when deferred and crashes
+    // Archicad when run inline), so the image is written straight to a folder.
+    // The write is quick and touches no nested event loop, so it runs inline on
+    // the main thread and the page awaits the result directly.
     jsACAPI->AddItem (new JS::Function ("SaveImage", [] (GS::Ref<JS::Base> params) -> GS::Ref<JS::Base> {
         const GS::UniString dataUrl = GetStringParam (params);
-        GS::UniString startErr;
+        GS::UniString result;
         RunOnMainThread ([&] {
-            startErr = NanoBanana::StartDeferredUiTask ([dataUrl] () -> GS::UniString {
-                return GS::UniString (SaveDataUrlToFile (dataUrl) ? "true" : "false");
-            });
+            const GS::UniString saveRes = SaveDataUrlToFile (dataUrl);
+            result = saveRes.BeginsWith (GS::UniString ("ERROR:"))
+                ? saveRes                                       // pass the error through
+                : GS::UniString ("SAVED:") + saveRes;           // success -> saved path
         });
-        return new JS::Value (startErr.IsEmpty () ? GS::UniString ("true") : startErr);
+        return new JS::Value (result);
     }));
 
     // Expand a brief prompt into a detailed one via a Gemini text model.

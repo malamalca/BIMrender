@@ -962,15 +962,14 @@
     saveBtn.addEventListener('click', function () {
         if (!currentDataUrl || taskBusy) return;
         taskBusy = true;
-        ARUTILS.SaveImage(currentDataUrl).then(function (started) {
-            if (!asBool(started)) {
-                taskBusy = false;
-                setStatus(startFailMsg(started, "Could not open the save dialog."), true);
-                return;
-            }
-            pollTask(function (res) {
-                if (res !== "true") setStatus("Save cancelled.");
-            }, 0);   // no timeout: the dialog may stay open indefinitely
+        // SaveImage auto-saves to a folder and resolves with "SAVED:<path>"
+        // (no dialog on the host), or an "ERROR: ..." string.
+        ARUTILS.SaveImage(currentDataUrl).then(function (res) {
+            taskBusy = false;
+            if (typeof res === "string" && res.indexOf("SAVED:") === 0)
+                setStatus("Saved to " + res.substring(6));
+            else
+                setStatus(startFailMsg(res, "Could not save the image."), true);
         });
     });
 
