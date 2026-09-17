@@ -10,9 +10,24 @@
 #include "FileSystem.hpp"
 #include "File.hpp"
 
+#include <MessageLoopExecutor.hpp>
+#include <FunctionRunnable.hpp>
+
+#include <chrono>
+#include <cstdio>
 #include <string>
 
 namespace NanoBanana {
+
+// TEMPORARY diagnostics for the missing settings dialog; remove once fixed.
+void NbDebugLog (const char* msg, long a)
+{
+    if (FILE* f = std::fopen ("/tmp/BIMrender_debug.log", "a")) {
+        std::fprintf (f, msg, a);
+        std::fprintf (f, "\n");
+        std::fclose (f);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Is the 3D model window the active one?
@@ -110,61 +125,105 @@ GS::UniString CaptureCurrent3DAsDataUrl (GSErrCode* saveErrOut)
 }
 
 // ---------------------------------------------------------------------------
-// Asynchronous capture via a module command (see Capture3D.hpp).
-// All of this runs on the main thread: StartAsyncCapture / FetchCaptureResult
+// Deferred tasks via a module command (see Capture3D.hpp).
+// All of this runs on the main thread: StartDeferredTask / FetchDeferredResult
 // are called from the JS bridge (main thread on macOS, marshalled there by
-// RunOnMainThread otherwise) and CaptureCommandHandler from the event loop.
+// RunOnMainThread otherwise) and DeferredCommandHandler from the event loop.
 // ---------------------------------------------------------------------------
-static GS::UniString captureResult;
-static bool          capturePending = false;
+static std::function<GS::UniString ()> deferredTask;
+static GS::UniString                   deferredResult;
+static bool                            deferredPending    = false;
+static bool                            deferredDispatched = false;   // handler entered
+static std::chrono::steady_clock::time_point deferredPostTime;
 
-bool StartAsyncCapture ()
+// Guard + arm shared by both Start variants. Returns an "ERROR: ..." text if
+// a task is already active, otherwise arms the slot and returns empty.
+static GS::UniString ArmDeferredTask (const std::function<GS::UniString ()>& task)
 {
-    if (capturePending)
-        return true;                       // a capture is already in flight
+    if (deferredPending) {
+        // One task at a time. A dispatched task may pend legitimately for
+        // minutes (a modal dialog stays open as long as the user likes), so
+        // it is always refused. Only a task whose handler never ran at all
+        // is abandoned, after 30 seconds — so one lost dispatch can't block
+        // every later operation. (If its handler still runs afterwards, it
+        // executes the new task; the extra handler run is a no-op.)
+        const auto pendingFor = std::chrono::steady_clock::now () - deferredPostTime;
+        if (deferredDispatched || pendingFor < std::chrono::seconds (30))
+            return GS::UniString ("ERROR: Another operation is still in progress. Try again in a moment.");
+    }
 
-    capturePending = true;
-    captureResult.Clear ();
+    deferredPending    = true;
+    deferredDispatched = false;
+    deferredPostTime   = std::chrono::steady_clock::now ();
+    deferredTask       = task;
+    deferredResult.Clear ();
+    return GS::EmptyUniString;
+}
+
+// Runs the armed task and publishes its result. Called by both dispatch paths.
+static void RunDeferredTaskNow ()
+{
+    deferredDispatched = true;
+    if (deferredTask != nullptr) {
+        deferredResult = deferredTask ();
+        deferredTask   = nullptr;
+    }
+    deferredPending = false;
+}
+
+GS::UniString StartDeferredTask (const std::function<GS::UniString ()>& task)
+{
+    const GS::UniString armErr = ArmDeferredTask (task);
+    if (!armErr.IsEmpty ())
+        return armErr;
 
     API_ModulID mdid = {};                 // our own 'MDID' resource values
     mdid.developerID = 1211329892;
     mdid.localID     = 439119418;
 
     const GSErrCode err = ACAPI_AddOnAddOnCommunication_CallFromEventLoop (
-        &mdid, CaptureCmdID, CaptureCmdVersion, nullptr, false, nullptr);
+        &mdid, DeferredCmdID, DeferredCmdVersion, nullptr, false, nullptr);
+    NbDebugLog ("StartDeferredTask: posted err=%ld", (long) err);
 
     if (err != NoError) {
-        capturePending = false;
-        return false;
+        deferredPending = false;
+        deferredTask    = nullptr;
+        return GS::UniString::Printf ("ERROR: Could not schedule the operation (Archicad error %d).", (int) err);
     }
-    return true;
+    return GS::EmptyUniString;
 }
 
-GS::UniString FetchCaptureResult ()
+GS::UniString StartDeferredUiTask (const std::function<GS::UniString ()>& task)
 {
-    if (capturePending)
+    const GS::UniString armErr = ArmDeferredTask (task);
+    if (!armErr.IsEmpty ())
+        return armErr;
+
+    NbDebugLog ("StartDeferredUiTask: posting to message loop");
+    GS::MessageLoopExecutor ().Execute (
+        GS::RunnableTask (new GS::FunctionRunnable ([] () {
+            NbDebugLog ("DeferredUiTask: running");
+            RunDeferredTaskNow ();
+            NbDebugLog ("DeferredUiTask: done, result len=%ld", (long) deferredResult.GetLength ());
+        })));
+    return GS::EmptyUniString;
+}
+
+GS::UniString FetchDeferredResult ()
+{
+    if (deferredPending)
         return GS::UniString ("PENDING");
 
-    GS::UniString result = captureResult;
-    captureResult.Clear ();                // one-shot
+    GS::UniString result = deferredResult;
+    deferredResult.Clear ();               // one-shot
     return result;
 }
 
-GSErrCode CaptureCommandHandler (GSHandle /*params*/, GSPtr /*resultData*/, bool /*silentMode*/)
+GSErrCode DeferredCommandHandler (GSHandle /*params*/, GSPtr /*resultData*/, bool /*silentMode*/)
 {
-    GSErrCode saveErr = NoError;
-    captureResult = CaptureCurrent3DAsDataUrl (&saveErr);
-    if (captureResult.IsEmpty ()) {
-        // APIERR_REFUSEDCMD from the picture export in a clean command context
-        // means Archicad itself refuses to save — the documented case is the
-        // Demo version, which cannot save anything.
-        if (saveErr == APIERR_REFUSEDCMD)
-            captureResult = "ERROR: Archicad refused to export the view. "
-                            "The Demo version cannot save; a full license is required.";
-        else
-            captureResult = "ERROR: Could not capture. Make sure the 3D window is active.";
-    }
-    capturePending = false;
+    NbDebugLog ("DeferredCommandHandler: entered, haveTask=%ld", (long) (deferredTask != nullptr ? 1 : 0));
+    RunDeferredTaskNow ();
+    NbDebugLog ("DeferredCommandHandler: done, result len=%ld", (long) deferredResult.GetLength ());
     return NoError;
 }
 

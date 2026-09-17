@@ -24,6 +24,8 @@
     },
     {
       "name": "ac29-INT-MAC",
+      "generator": "Xcode",
+      "binaryDir": "${sourceDir}/out/build/ac29-INT-MAC",
       "cacheVariables": {
         "AC_API_DEVKIT_DIR": "/users/miha.nahtigal/Development/API.Development.Kit.MAC.29.3100"
       }

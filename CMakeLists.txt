@@ -9,7 +9,12 @@ function (SetCompilerOptions target acVersion)
         target_compile_features (${target} PUBLIC cxx_std_20)
     endif ()
 
-	target_compile_options (${target} PUBLIC "$<$<CONFIG:Debug>:-DDEBUG>")
+	# Use a compile DEFINITION (not a -DDEBUG compile option): the Xcode
+	# generator routes compile options into OTHER_CPLUSPLUSFLAGS only, so a
+	# -DDEBUG option would never reach C files (e.g. BIMrender.c, whose
+	# #ifdef DEBUG selects the modal dialog). A definition goes into
+	# GCC_PREPROCESSOR_DEFINITIONS for both C and C++.
+	target_compile_definitions (${target} PUBLIC "$<$<CONFIG:Debug>:DEBUG>")
 	if (WIN32)
 		 target_compile_options (${target} PUBLIC /W4 /WX
             /Zc:wchar_t-
@@ -99,8 +104,14 @@ if (WIN32)
 	set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
 else ()
 	set (CMAKE_OSX_DEPLOYMENT_TARGET 10.15)
+	# Build a universal (arm64 + x86_64) bundle for every configuration.
+	# Archicad on Apple Silicon loads add-ons natively as arm64, so a single-arch
+	# bundle (e.g. a Debug build, which Xcode strips to the active arch via
+	# ONLY_ACTIVE_ARCH=YES) is rejected and shown as "disabled" in the Add-On
+	# Manager. An explicit arch list plus ONLY_ACTIVE_ARCH=NO keeps Debug
+	# universal too; Xcode then also ad-hoc signs the arm64 slice.
+	set (CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
 	if (CMAKE_GENERATOR STREQUAL Xcode)
-		set (CMAKE_OSX_ARCHITECTURES "$(ARCHS_STANDARD)" CACHE INTERNAL "" FORCE)
 		set (CMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH "NO")
 	endif ()
 endif ()
