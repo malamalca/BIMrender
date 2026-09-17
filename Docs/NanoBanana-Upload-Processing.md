@@ -263,9 +263,9 @@ sequenceDiagram
 - **Body (region edit / inpaint):** when a **mask** is supplied (slot 4), the
   call becomes a precise inpaint — adds `mask`, `inpainting_mask_invert: 0`
   (white = repaint), `inpainting_fill: 1`, `inpaint_full_res: true` (+ padding),
-  `mask_blur: 4`, and raises `denoising_strength` to **0.75** in the masked area.
-  Only the marked pixels change; the realism suffix drops the "keep geometry" cue
-  so edits like "put a sofa here" aren't fought.
+  `mask_blur: 4`, at `denoising_strength` **0.6** (same as the whole-image pass;
+  fixed in `WebUIClient.cpp`). Only the marked pixels change; the realism suffix
+  drops the "keep geometry" cue so edits like "put a sofa here" aren't fought.
 - **Auth:** optional HTTP Basic — supply credentials inline in the URL
   (`http://user:pass@host:port`) for a server launched with `--api-auth`. The
   client moves the userinfo into an `Authorization: Basic` header.

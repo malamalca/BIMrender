@@ -223,12 +223,48 @@
         border-radius: 6px; padding: 5px 6px; flex: 1; min-width: 108px;
     }
     .tool-panel select:focus { outline: none; border-color: var(--accent); }
+
+    /* --- in-page dropdown (replaces the native <select> popup, which the
+           host's embedded browser only keeps open while the mouse is held) --- */
+    .dd { position: relative; flex: 1; min-width: 108px; }
+    .dd > select { display: none; }
+    .dd-btn {
+        width: 100%; text-align: left;
+        font: inherit; font-size: 12px; color: var(--text);
+        background: var(--stage); border: 1px solid var(--border);
+        border-radius: 6px; padding: 5px 20px 5px 6px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .dd-btn::after {
+        content: "▾"; position: absolute; right: 7px; top: 50%;
+        transform: translateY(-50%); color: var(--muted); pointer-events: none;
+    }
+    .dd.open > .dd-btn { border-color: var(--accent); }
+    .dd-menu {
+        display: none; position: absolute; z-index: 30; left: 0; right: 0;
+        top: calc(100% + 3px); max-height: 168px; overflow-y: auto;
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 6px; padding: 3px; box-shadow: 0 6px 18px rgba(0,0,0,.45);
+    }
+    .dd.up > .dd-menu { top: auto; bottom: calc(100% + 3px); }
+    .dd.open > .dd-menu { display: block; }
+    .dd-opt {
+        display: block; width: 100%; text-align: left;
+        background: transparent; border: 1px solid transparent; border-radius: 4px;
+        padding: 5px 7px; font: inherit; font-size: 12px; color: var(--text);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .dd-opt:hover:not(:disabled) { background: var(--stage); border-color: var(--border); }
+    .dd-opt.sel { color: var(--accent-hi); }
     #histList {
         display: flex; flex-direction: column; gap: 4px;
         width: 100%; max-height: 132px; overflow-y: auto;
     }
     .hist-item {
         text-align: left; width: 100%;
+        /* flex children shrink by default: without this the rows collapse to a
+           few pixels once the list is taller than #histList's max-height */
+        flex: 0 0 auto; min-height: 28px;
         background: var(--stage); border: 1px solid var(--border);
         border-radius: 6px; padding: 6px 8px; font-size: 12px; color: var(--text);
         cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -279,8 +315,8 @@
     </div>
 
     <div id="promptTools">
-        <button id="enhanceBtn" title="Expand your prompt into a detailed one using Gemini">✨ Enhance</button>
         <button id="tmplToggle" title="Build a prompt from presets">🎛 Templates</button>
+        <button id="enhanceBtn" title="Expand your prompt into a detailed one using Gemini">✨ Enhance</button>
         <button id="histToggle" title="Reuse a previous prompt">🕘 History</button>
     </div>
 
@@ -970,6 +1006,78 @@
         btn.classList.toggle('active', show);
         return show;
     }
+
+    // ---- in-page dropdowns --------------------------------------------
+    // The host's embedded browser only keeps a native <select> popup open while
+    // the mouse button is held down, so each <select> is replaced by a button +
+    // menu rendered in the page: one click opens, a second picks, a click
+    // anywhere else (or Escape) closes. The <select> itself stays in the DOM as
+    // the value store, so the <option> markup and `sel.value` reads are unchanged.
+    var dropdowns = [];
+    function closeDropdowns(except) {
+        for (var i = 0; i < dropdowns.length; i++)
+            if (dropdowns[i] !== except) dropdowns[i].classList.remove('open');
+    }
+    function makeDropdown(sel) {
+        var wrap = document.createElement('div');
+        wrap.className = 'dd';
+        if (sel.title) wrap.title = sel.title;
+        sel.parentNode.insertBefore(wrap, sel);
+        wrap.appendChild(sel);
+
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dd-btn';
+        var menu = document.createElement('div');
+        menu.className = 'dd-menu';
+        wrap.appendChild(btn);
+        wrap.appendChild(menu);
+
+        function syncLabel() {
+            var opt = sel.options[sel.selectedIndex];
+            btn.textContent = opt ? opt.text : '';
+            var opts = menu.children;
+            for (var i = 0; i < opts.length; i++)
+                opts[i].classList.toggle('sel', i === sel.selectedIndex);
+        }
+        for (var i = 0; i < sel.options.length; i++) {
+            (function (idx) {
+                var o = document.createElement('button');
+                o.type = 'button';
+                o.className = 'dd-opt';
+                o.textContent = sel.options[idx].text;
+                o.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    sel.selectedIndex = idx;
+                    syncLabel();
+                    wrap.classList.remove('open');
+                });
+                menu.appendChild(o);
+            })(i);
+        }
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var show = !wrap.classList.contains('open');
+            closeDropdowns(wrap);
+            wrap.classList.toggle('open', show);
+            if (show) {
+                // the palette can be short: drop the menu towards whichever side
+                // has more room and cap its height so it is never clipped
+                var r = btn.getBoundingClientRect();
+                var below = window.innerHeight - r.bottom - 8, above = r.top - 8;
+                var up = menu.scrollHeight > below && above > below;
+                wrap.classList.toggle('up', up);
+                menu.style.maxHeight = Math.max(72, Math.min(168, up ? above : below)) + 'px';
+            }
+        });
+        syncLabel();
+        dropdowns.push(wrap);
+    }
+    [tmplStyle, tmplTime, tmplWeather, tmplCamera].forEach(makeDropdown);
+    document.addEventListener('click', function () { closeDropdowns(null); });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeDropdowns(null);
+    });
 
     // ---- E1: smart prompt templates -----------------------------------
     // Compose a prompt fragment from the chosen presets. Selecting nothing still
