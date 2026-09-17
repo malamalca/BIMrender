@@ -15,6 +15,7 @@
 #include "NanoBanana/Base64.hpp"
 #include "NanoBanana/Capture3D.hpp"
 #include "NanoBanana/GeminiClient.hpp"
+#include "NanoBanana/PlacePicture.hpp"
 #include "NanoBanana/FluxClient.hpp"
 #include "NanoBanana/WebUIClient.hpp"
 #include "NanoBanana/Settings.hpp"
@@ -407,6 +408,33 @@ void NanoBananaPanel::RegisterJavaScriptObject ()
                 : GS::UniString ("SAVED:") + saveRes;           // success -> saved path
         });
         return new JS::Value (result);
+    }));
+
+    // Can the active window hold a figure?  -> "true" | "false"
+    // Drives the Place button the same way Is3DActive drives Capture: the
+    // palette is modeless, so the active window can change at any time.
+    jsACAPI->AddItem (new JS::Function ("CanPlaceImage", [boolValue] (GS::Ref<JS::Base>) -> GS::Ref<JS::Base> {
+        bool can = false;
+        RunOnMainThread ([&] { can = NanoBanana::CanPlacePictureInCurrentWindow (); });
+        return boolValue (can);
+    }));
+
+    // Place a data URL image into the active 2D window as a figure
+    // -> "true" | "ERROR: <reason>" (started?). Creating an element needs
+    // command context, so this runs as a deferred module-command task like the
+    // capture; the page polls GetAsyncResult for "PLACED:<window title>".
+    jsACAPI->AddItem (new JS::Function ("PlaceImage", [] (GS::Ref<JS::Base> params) -> GS::Ref<JS::Base> {
+        const GS::UniString dataUrl = GetStringParam (params);
+        GS::UniString startErr;
+        RunOnMainThread ([&] {
+            startErr = NanoBanana::StartDeferredTask ([dataUrl] () -> GS::UniString {
+                const GS::UniString res = NanoBanana::PlaceDataUrlAsPicture (dataUrl);
+                if (res.BeginsWith (GS::UniString ("ERROR:")))
+                    return res;                                    // pass the reason through
+                return GS::UniString ("PLACED:") + res;            // success -> window title
+            });
+        });
+        return new JS::Value (startErr.IsEmpty () ? GS::UniString ("true") : startErr);
     }));
 
     // Expand a brief prompt into a detailed one via a Gemini text model.

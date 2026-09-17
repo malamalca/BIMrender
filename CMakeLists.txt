@@ -135,6 +135,15 @@ set (ResourceObjectsDir ${CMAKE_BINARY_DIR}/ResourceObjects)
 file (GLOB AddOnImageFiles
 	${AddOnResourcesFolder}/RFIX/Images/*.svg
 )
+
+# Files the .grc resources embed by name (the browser page, via
+# 'DATA' ID_DATA_NANOBANANA_HTML in BIMrenderFix.grc). They must be listed as
+# dependencies of the resource compilation in their own right: editing one
+# leaves every .grc untouched, so without this the add-on keeps the page that
+# was compiled in last time.
+file (GLOB AddOnDataFiles
+	${AddOnResourcesFolder}/RFIX/*.html
+)
 if (WIN32)
 	file (GLOB AddOnResourceFiles
 		${AddOnResourcesFolder}/R${AC_ADDON_LANGUAGE}/*.grc
@@ -151,11 +160,11 @@ else ()
 endif ()
 
 source_group ("Images" FILES ${AddOnImageFiles})
-source_group ("Resources" FILES ${AddOnResourceFiles})
+source_group ("Resources" FILES ${AddOnResourceFiles} ${AddOnDataFiles})
 add_custom_target (
 	AddOnResources ALL
 	DEPENDS "${ResourceObjectsDir}/AddOnResources.stamp"
-	SOURCES ${AddOnResourceFiles} ${AddOnImageFiles}
+	SOURCES ${AddOnResourceFiles} ${AddOnImageFiles} ${AddOnDataFiles}
 )
 
 get_filename_component (AddOnSourcesFolderAbsolute "${CMAKE_CURRENT_LIST_DIR}/${AddOnSourcesFolder}" ABSOLUTE)
@@ -164,7 +173,7 @@ get_filename_component (APIDevKitToolsFolderAbsolute "${AC_API_DEVKIT_DIR}/Suppo
 if (WIN32)
 	add_custom_command (
 		OUTPUT "${ResourceObjectsDir}/AddOnResources.stamp"
-		DEPENDS ${AddOnResourceFiles} ${AddOnImageFiles}
+		DEPENDS ${AddOnResourceFiles} ${AddOnImageFiles} ${AddOnDataFiles}
 		COMMENT "Compiling resources..."
 		COMMAND ${CMAKE_COMMAND} -E make_directory "${ResourceObjectsDir}"
 		COMMAND python3 "${APIDevKitToolsFolderAbsolute}/CompileResources.py" "${AC_ADDON_LANGUAGE}" "${AC_API_DEVKIT_DIR}" "${AddOnSourcesFolderAbsolute}" "${AddOnResourcesFolderAbsolute}" "${ResourceObjectsDir}" "${ResourceObjectsDir}/${AC_ADDON_NAME}.res"
@@ -173,7 +182,7 @@ if (WIN32)
 else ()
 	add_custom_command (
 		OUTPUT "${ResourceObjectsDir}/AddOnResources.stamp"
-		DEPENDS ${AddOnResourceFiles} ${AddOnImageFiles}
+		DEPENDS ${AddOnResourceFiles} ${AddOnImageFiles} ${AddOnDataFiles}
 		COMMENT "Compiling resources..."
 		COMMAND ${CMAKE_COMMAND} -E make_directory "${ResourceObjectsDir}"
 		COMMAND python3 "${APIDevKitToolsFolderAbsolute}/CompileResources.py" "${AC_ADDON_LANGUAGE}" "${AC_API_DEVKIT_DIR}" "${AddOnSourcesFolderAbsolute}" "${AddOnResourcesFolderAbsolute}" "${ResourceObjectsDir}" "${CMAKE_BINARY_DIR}/$<CONFIG>/${AC_ADDON_NAME}.bundle/Contents/Resources"

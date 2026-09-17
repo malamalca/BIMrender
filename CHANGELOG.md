@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Place the render into the project as a picture: a "🖼 Place" button in the
+  panel creates a figure (picture element) from the current render in the
+  active 2D window — floor plan, section/elevation, detail, worksheet, 3D
+  document or layout — centred in the current zoom at 60% of the visible
+  area, in a "Place AI Render" undo step
+  ([PlacePicture.cpp](Src/NanoBanana/PlacePicture.cpp),
+  `ARUTILS.PlaceImage` in
+  [NanoBananaPanel.cpp](Src/Common/NanoBananaPanel.cpp)). The figure's aspect
+  ratio comes from the PNG/JPEG header, read directly from the image bytes.
+  Creating an element needs command context, so the placement runs as a
+  deferred module-command task like the 3D capture. The button follows the
+  active window through the panel's 1-second poll
+  (`ARUTILS.CanPlaceImage`) and stays disabled in the 3D window, where a
+  figure cannot be placed.
+
 ### Fixed
 - macOS: boolean return values from the `ARUTILS` JS bridge arrived in the
   page as empty strings (the CEF bridge on Mac does not marshal
@@ -42,8 +58,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   error code) instead of a generic message, and a task stuck in the pending
   state is abandoned after 30 seconds so it cannot block every subsequent
   capture/save/settings operation.
+- Build: editing [nanoBanana.html](RFIX/nanoBanana.html) did not re-run the
+  resource compilation, so the add-on kept the page compiled in by an earlier
+  build while the C++ side was rebuilt. The page is embedded by name from
+  `BIMrenderFix.grc` ('DATA' ID_DATA_NANOBANANA_HTML), and the resource step
+  only depended on the `.grc` files themselves, which such an edit leaves
+  untouched — a page-only change therefore never reached the binary, and a
+  mixed build could pair a new JS bridge with an old page (after the bridge
+  was renamed to `GetAsyncResult`, that combination broke the 3D capture).
+  [CMakeLists.txt](CMakeLists.txt) now globs the embedded data files into
+  `AddOnDataFiles` and lists them as dependencies of the resource step on both
+  platforms.
+- Archicad 29 on Windows never ran the deferred module command: the
+  `ACAPI_AddOnAddOnCommunication_CallFromEventLoop` post returned `NoError`
+  but `DeferredCommandHandler` was never called back (an add-on posting a
+  command to itself), so every 3D capture pended until the page's 15-second
+  timeout. `FetchDeferredResult` — already polled every 150 ms by the page —
+  now doubles as the timer: when the handler has not been entered 1.5 seconds
+  after the post, the task is run from the message loop instead
+  ([Capture3D.cpp](Src/NanoBanana/Capture3D.cpp)), the same dispatch the
+  settings dialog uses, and still outside the CEF callback stack the module
+  command existed to escape. Whichever path arrives first wins; the other
+  becomes a no-op.
+- Prompt history rows collapsed to a few pixels high once the saved prompts
+  exceeded the list's `max-height`, hiding the prompt text: the rows are flex
+  children of `#histList` and shrank by default. They now keep their height
+  and the list scrolls instead ([nanoBanana.html](RFIX/nanoBanana.html)).
+- Template preset pickers could only be used by holding the mouse button down
+  while dragging onto an option: the host's embedded browser opens a native
+  `<select>` popup only while the button is held, and that popup is drawn
+  outside the page, so it cannot be styled or controlled from JS. Each
+  `<select>` is now backed by an in-page dropdown (one click opens, a second
+  picks, a click anywhere else or Escape closes) that flips above the button
+  and caps its height when the palette is short. The `<select>` elements stay
+  in the DOM as the value store, so the `<option>` markup and
+  `buildTemplate()` are unchanged ([nanoBanana.html](RFIX/nanoBanana.html)).
 
 ### Changed
+- Prompt tool buttons reordered to "🎛 Templates · ✨ Enhance · 🕘 History"
+  ([nanoBanana.html](RFIX/nanoBanana.html)).
 - Misleading "not in 3D" guidance in the panel: the placeholder and status
   text said to *re-open the command* from the 3D window, but the palette
   polls the active window every second, so simply switching to the 3D window

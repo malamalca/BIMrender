@@ -132,9 +132,14 @@ GS::UniString CaptureCurrent3DAsDataUrl (GSErrCode* saveErrOut)
 // ---------------------------------------------------------------------------
 static std::function<GS::UniString ()> deferredTask;
 static GS::UniString                   deferredResult;
-static bool                            deferredPending    = false;
-static bool                            deferredDispatched = false;   // handler entered
+static bool                            deferredPending        = false;
+static bool                            deferredDispatched     = false;   // handler entered
+static bool                            deferredFallbackPosted = false;   // message-loop rescue sent
 static std::chrono::steady_clock::time_point deferredPostTime;
+
+// How long to wait for the module command before running the task from the
+// message loop instead (see FetchDeferredResult).
+static const auto deferredDispatchGrace = std::chrono::milliseconds (1500);
 
 // Guard + arm shared by both Start variants. Returns an "ERROR: ..." text if
 // a task is already active, otherwise arms the slot and returns empty.
@@ -152,10 +157,11 @@ static GS::UniString ArmDeferredTask (const std::function<GS::UniString ()>& tas
             return GS::UniString ("ERROR: Another operation is still in progress. Try again in a moment.");
     }
 
-    deferredPending    = true;
-    deferredDispatched = false;
-    deferredPostTime   = std::chrono::steady_clock::now ();
-    deferredTask       = task;
+    deferredPending        = true;
+    deferredDispatched     = false;
+    deferredFallbackPosted = false;
+    deferredPostTime       = std::chrono::steady_clock::now ();
+    deferredTask           = task;
     deferredResult.Clear ();
     return GS::EmptyUniString;
 }
@@ -200,6 +206,7 @@ GS::UniString StartDeferredUiTask (const std::function<GS::UniString ()>& task)
         return armErr;
 
     NbDebugLog ("StartDeferredUiTask: posting to message loop");
+    deferredFallbackPosted = true;           // this *is* the message-loop path
     GS::MessageLoopExecutor ().Execute (
         GS::RunnableTask (new GS::FunctionRunnable ([] () {
             NbDebugLog ("DeferredUiTask: running");
@@ -209,10 +216,37 @@ GS::UniString StartDeferredUiTask (const std::function<GS::UniString ()>& task)
     return GS::EmptyUniString;
 }
 
+// Runs the armed task from the message loop when the module command never
+// came back. Archicad 29 on Windows accepts the CallFromEventLoop post
+// (err == NoError) but never calls DeferredCommandHandler — an add-on posting
+// a command to itself — so without this the task pends until the page times
+// out and every capture fails. The message loop is the same path the settings
+// dialog uses successfully, and it is still outside the CEF callback stack
+// whose nested event loop is what the module command was there to avoid.
+static void PostDeferredFallback ()
+{
+    deferredFallbackPosted = true;
+    NbDebugLog ("Deferred: no dispatch, falling back to the message loop");
+    GS::MessageLoopExecutor ().Execute (
+        GS::RunnableTask (new GS::FunctionRunnable ([] () {
+            if (!deferredPending || deferredDispatched)
+                return;                      // the module command got there first
+            RunDeferredTaskNow ();
+            NbDebugLog ("Deferred fallback: done, result len=%ld", (long) deferredResult.GetLength ());
+        })));
+}
+
 GS::UniString FetchDeferredResult ()
 {
-    if (deferredPending)
+    if (deferredPending) {
+        // The page polls this every 150 ms, so it doubles as the timer for the
+        // dispatch grace period; no extra thread is needed.
+        if (!deferredDispatched && !deferredFallbackPosted &&
+            std::chrono::steady_clock::now () - deferredPostTime > deferredDispatchGrace) {
+            PostDeferredFallback ();
+        }
         return GS::UniString ("PENDING");
+    }
 
     GS::UniString result = deferredResult;
     deferredResult.Clear ();               // one-shot

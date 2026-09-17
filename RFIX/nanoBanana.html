@@ -370,6 +370,7 @@
         <div id="status"></div>
         <button id="undoBtn" disabled title="Step back one edit">↶ Undo</button>
         <button id="resetBtn" disabled title="Discard edits and start again from the captured image">Start over</button>
+        <button id="placeBtn" disabled title="Place the render into the active Archicad window as a picture">🖼 Place</button>
         <button id="saveBtn" disabled title="Save last AI render to disk">💾 Save</button>
         <button id="sendBtn" class="primary" disabled>Send</button>
     </div>
@@ -385,6 +386,7 @@
     var sendBtn     = document.getElementById('sendBtn');
     var resetBtn    = document.getElementById('resetBtn');
     var saveBtn     = document.getElementById('saveBtn');
+    var placeBtn    = document.getElementById('placeBtn');
     var undoBtn     = document.getElementById('undoBtn');
     var promptEl    = document.getElementById('prompt');
     var statusEl    = document.getElementById('status');
@@ -481,7 +483,30 @@
             }
         });
     }
-    setInterval(function () { refreshThreeD(); refreshProvider(); }, 1000);
+    // ---- place availability -------------------------------------------
+    // A figure is a 2D element, so the host only accepts it in a drawing
+    // window or a layout. The active window can change under a modeless
+    // palette, so this is polled like the capture availability.
+    var canPlaceWindow = false;
+
+    function updatePlaceBtn() {
+        placeBtn.disabled = !currentDataUrl || !canPlaceWindow;
+        placeBtn.title = !currentDataUrl
+            ? "Capture or render an image first"
+            : (canPlaceWindow
+                ? "Place the render into the active Archicad window as a picture"
+                : "Switch to a 2D window or a layout to place the picture");
+    }
+
+    function refreshCanPlace() {
+        if (!window.ARUTILS || !ARUTILS.CanPlaceImage) return;
+        ARUTILS.CanPlaceImage().then(function (canRaw) {
+            canPlaceWindow = asBool(canRaw);
+            updatePlaceBtn();
+        });
+    }
+
+    setInterval(function () { refreshThreeD(); refreshProvider(); refreshCanPlace(); }, 1000);
 
     // ---- compare slider ----------------------------------------------
     function applySlider() {
@@ -550,6 +575,7 @@
         showCompare(false);     // fresh capture clears any previous render
         sendBtn.disabled = false;
         saveBtn.disabled = false;
+        updatePlaceBtn();
         resetBtn.disabled = true;
         undoBtn.disabled  = true;
         markBtn.disabled  = false;
@@ -593,6 +619,7 @@
             resetBtn.disabled = false;
         }
         undoBtn.disabled = history.length <= 1;
+        updatePlaceBtn();                 // the working image changed
     }
 
     // ---- start over: revert the working image to the original capture --
@@ -1006,6 +1033,29 @@
                 setStatus("Saved to " + res.substring(6));
             else
                 setStatus(startFailMsg(res, "Could not save the image."), true);
+        });
+    });
+
+    // ---- place the render into the project ----------------------------
+    // PlaceImage only *starts* the placement: creating an element needs
+    // command context on the host, which it gets from the event loop, so the
+    // outcome arrives through the same GetAsyncResult poll as the capture.
+    placeBtn.addEventListener('click', function () {
+        if (!currentDataUrl || taskBusy) return;
+        taskBusy = true;
+        setStatus("Placing the picture…");
+        ARUTILS.PlaceImage(currentDataUrl).then(function (started) {
+            if (!asBool(started)) {
+                taskBusy = false;
+                setStatus(startFailMsg(started, "Could not place the picture."), true);
+                return;
+            }
+            pollTask(function (res) {
+                if (typeof res === "string" && res.indexOf("PLACED:") === 0)
+                    setStatus("Picture placed in " + res.substring(7) + ".");
+                else
+                    setStatus(startFailMsg(res, "Could not place the picture."), true);
+            }, 20000);
         });
     });
 
