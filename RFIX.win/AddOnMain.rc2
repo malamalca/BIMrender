@@ -5,3 +5,50 @@
 #include "dlgNanoBananaSettings.grc.rc2"
 
 1	ICON    LOADONCALL MOVEABLE IMPURE  ACAP.ico
+
+/* Archicad 30 reads the Archicad version an add-on was built for from the
+   PRODUCTVERSION field of this version resource, and refuses the add-on with
+   "the file is either not an add-on or an outdated add-on that cannot be used
+   with this version of Archicad" when it does not match. The Archicad 30
+   add-on template generates the field as 0,<Archicad version>,0,0
+   (Tools/VersionInfo.rc.in in the DevKit examples; the GS build number is 0 on
+   Windows).
+
+   Archicad 27-29 generated no version resource at all and never looked at one,
+   and this add-on has shipped without one for all three. The whole block is
+   therefore conditional on AC_API_VERSION, which only Tools/CompileResources.py
+   — the project copy used for Archicad 30 and newer — passes to rc. The
+   Archicad 27-29 builds use the DevKit's own script, which cannot pass it, and
+   keep producing exactly the resource they produced before. */
+#ifdef AC_API_VERSION
+
+1 VERSIONINFO
+    FILEVERSION     1,0,1,0
+    PRODUCTVERSION  0,AC_API_VERSION,0,0
+    FILEFLAGSMASK   0x3fL
+    FILEFLAGS       0x0L
+    FILEOS          0x40004L
+    FILETYPE        0x2L
+    FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName",      "ARHIM d.o.o."
+            VALUE "FileDescription",  "BIMrender - AI rendering for Archicad"
+            VALUE "FileVersion",      "1.0.1"
+            VALUE "InternalName",     "BIMrender"
+            VALUE "LegalCopyright",   "Copyright (C) 2026 ARHIM d.o.o."
+            VALUE "OriginalFilename", "BIMrender.apx"
+            VALUE "ProductName",      "BIMrender"
+            VALUE "ProductVersion",   "1.0.1"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04E4
+    END
+END
+
+#endif

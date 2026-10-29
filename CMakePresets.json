@@ -23,6 +23,12 @@
       }
     },
     {
+      "name": "ac30-INT",
+      "cacheVariables": {
+        "AC_API_DEVKIT_DIR": "D:\\ArchicadDev\\GRAPHISOFT\\API Development Kit 30.3000"
+      }
+    },
+    {
       "name": "ac29-INT-MAC",
       "generator": "Xcode",
       "binaryDir": "${sourceDir}/out/build/ac29-INT-MAC",
@@ -42,6 +48,13 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE":"Debug",
         "AC_API_DEVKIT_DIR": "D:\\ArchicadDev\\GRAPHISOFT\\API Development Kit 29.3100"
+      }
+    },
+    {
+      "name": "debug30",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":"Debug",
+        "AC_API_DEVKIT_DIR": "D:\\ArchicadDev\\GRAPHISOFT\\API Development Kit 30.3000"
       }
     }
   ],
@@ -95,6 +108,16 @@
     {
       "name": "ac29-INT",
       "configurePreset": "ac29-INT",
+      "configuration": "Release"
+    },
+    {
+      "name": "ac30-debug",
+      "configurePreset": "ac30-INT",
+      "configuration": "Debug"
+    },
+    {
+      "name": "ac30-INT",
+      "configurePreset": "ac30-INT",
       "configuration": "Release"
     }
   ]

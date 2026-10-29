@@ -90,11 +90,23 @@ else ()
 	message (FATAL_ERROR "Failed to detect Archicad version, please check the value of the AC_API_DEVKIT_DIR variable.")
 endif ()
 
+# Detect the DevKit build number. From Archicad 30 on it is passed to
+# CompileResources.py, which uses it to decide which ResConv options to use.
+set (APIDEVKIT_BUILDNUMBER_FILE_LOCATION ${AC_API_DEVKIT_DIR}/VersionAndBuildNumber.txt)
+set (APIDEVKIT_BUILDNUMBER "default")
+if (EXISTS ${APIDEVKIT_BUILDNUMBER_FILE_LOCATION})
+	file (READ ${APIDEVKIT_BUILDNUMBER_FILE_LOCATION} APIDevKitBuildNumberContent)
+	if (APIDevKitBuildNumberContent MATCHES "AC_BUILD_NUMBER[ \t]+\"([0-9]+)\"")
+		set (APIDEVKIT_BUILDNUMBER ${CMAKE_MATCH_1})
+	endif ()
+endif ()
+message (STATUS "APIDevKit build number: ${APIDEVKIT_BUILDNUMBER}")
+
 # General settings
 set (CMAKE_SUPPRESS_REGENERATION 1)
 set (CMAKE_CONFIGURATION_TYPES Debug;Release;RelWithDebInfo)
 if (WIN32)
-	if ("${ARCHICAD_VERSION}" STRLESS_EQUAL "28")
+	if (${ARCHICAD_VERSION} LESS_EQUAL 28)
 		set (CMAKE_GENERATOR_TOOLSET v142)
 		message (STATUS "Toolset: v142 for Archicad Version: ${ARCHICAD_VERSION}")
 	else ()
@@ -150,12 +162,14 @@ if (WIN32)
 		${AddOnResourcesFolder}/RFIX/*.grc
 		${AddOnResourcesFolder}/RFIX/*.grc
 		${AddOnResourcesFolder}/RFIX.win/*.rc2
+		${AddOnResourcesFolder}/Tools/*.py
 	)
 else ()
 	file (GLOB AddOnResourceFiles
 		${AddOnResourcesFolder}/R${AC_ADDON_LANGUAGE}/*.grc
 		${AddOnResourcesFolder}/RFIX/*.grc
 		${AddOnResourcesFolder}/RFIX.mac/*.plist
+		${AddOnResourcesFolder}/Tools/*.py
 	)
 endif ()
 
@@ -170,13 +184,53 @@ add_custom_target (
 get_filename_component (AddOnSourcesFolderAbsolute "${CMAKE_CURRENT_LIST_DIR}/${AddOnSourcesFolder}" ABSOLUTE)
 get_filename_component (AddOnResourcesFolderAbsolute "${CMAKE_CURRENT_LIST_DIR}/${AddOnResourcesFolder}" ABSOLUTE)
 get_filename_component (APIDevKitToolsFolderAbsolute "${AC_API_DEVKIT_DIR}/Support/Tools" ABSOLUTE)
+get_filename_component (APIDevKitSupportFolderAbsolute "${AC_API_DEVKIT_DIR}/Support" ABSOLUTE)
+get_filename_component (AddOnToolsFolderAbsolute "${CMAKE_CURRENT_LIST_DIR}/Tools" ABSOLUTE)
+
+# Up to Archicad 29 the DevKit shipped CompileResources.py in Support/Tools. From
+# Archicad 30 on it is part of the add-on project template instead, and its command
+# line changed, so the project carries its own copy in ./Tools (see Tools/README.md).
+if (${ARCHICAD_VERSION} LESS 30)
+	set (CompileResourcesScript "${APIDevKitToolsFolderAbsolute}/CompileResources.py")
+	set (CompileResourcesArgs
+		"${AC_ADDON_LANGUAGE}"
+		"${AC_API_DEVKIT_DIR}"
+		"${AddOnSourcesFolderAbsolute}"
+		"${AddOnResourcesFolderAbsolute}"
+		"${ResourceObjectsDir}"
+	)
+else ()
+	# The project copy needs the DevKit build number to pick the right ResConv
+	# options (-py / -sc, which generate the Dark Mode icons). Without it the
+	# script falls back to an APIDevKitLinks.json the project copy does not carry,
+	# so fail here rather than part way through the resource compilation.
+	if (APIDEVKIT_BUILDNUMBER STREQUAL "default")
+		message (FATAL_ERROR "Failed to read AC_BUILD_NUMBER from ${APIDEVKIT_BUILDNUMBER_FILE_LOCATION}; Archicad ${ARCHICAD_VERSION} resource compilation needs the DevKit build number.")
+	endif ()
+	set (CompileResourcesScript "${AddOnToolsFolderAbsolute}/CompileResources.py")
+	set (CompileResourcesArgs
+		"${AC_ADDON_NAME}"
+		"${AC_ADDON_LANGUAGE}"
+		"INT"
+		"${ARCHICAD_VERSION}"
+		"${APIDEVKIT_BUILDNUMBER}"
+		"${APIDevKitSupportFolderAbsolute}"
+		"${AddOnSourcesFolderAbsolute}"
+		"${AddOnResourcesFolderAbsolute}"
+		"${ResourceObjectsDir}"
+	)
+endif ()
+if (NOT EXISTS "${CompileResourcesScript}")
+	message (FATAL_ERROR "Resource compiler not found: ${CompileResourcesScript}")
+endif ()
+
 if (WIN32)
 	add_custom_command (
 		OUTPUT "${ResourceObjectsDir}/AddOnResources.stamp"
 		DEPENDS ${AddOnResourceFiles} ${AddOnImageFiles} ${AddOnDataFiles}
 		COMMENT "Compiling resources..."
 		COMMAND ${CMAKE_COMMAND} -E make_directory "${ResourceObjectsDir}"
-		COMMAND python3 "${APIDevKitToolsFolderAbsolute}/CompileResources.py" "${AC_ADDON_LANGUAGE}" "${AC_API_DEVKIT_DIR}" "${AddOnSourcesFolderAbsolute}" "${AddOnResourcesFolderAbsolute}" "${ResourceObjectsDir}" "${ResourceObjectsDir}/${AC_ADDON_NAME}.res"
+		COMMAND python3 "${CompileResourcesScript}" ${CompileResourcesArgs} "${ResourceObjectsDir}/${AC_ADDON_NAME}.res"
 		COMMAND ${CMAKE_COMMAND} -E touch "${ResourceObjectsDir}/AddOnResources.stamp"
 	)
 else ()
@@ -185,7 +239,7 @@ else ()
 		DEPENDS ${AddOnResourceFiles} ${AddOnImageFiles} ${AddOnDataFiles}
 		COMMENT "Compiling resources..."
 		COMMAND ${CMAKE_COMMAND} -E make_directory "${ResourceObjectsDir}"
-		COMMAND python3 "${APIDevKitToolsFolderAbsolute}/CompileResources.py" "${AC_ADDON_LANGUAGE}" "${AC_API_DEVKIT_DIR}" "${AddOnSourcesFolderAbsolute}" "${AddOnResourcesFolderAbsolute}" "${ResourceObjectsDir}" "${CMAKE_BINARY_DIR}/$<CONFIG>/${AC_ADDON_NAME}.bundle/Contents/Resources"
+		COMMAND python3 "${CompileResourcesScript}" ${CompileResourcesArgs} "${CMAKE_BINARY_DIR}/$<CONFIG>/${AC_ADDON_NAME}.bundle/Contents/Resources"
 		COMMAND ${CMAKE_COMMAND} -E copy "${AC_API_DEVKIT_DIR}/Support/Inc/PkgInfo" "${CMAKE_BINARY_DIR}/$<CONFIG>/${AC_ADDON_NAME}.bundle/Contents/PkgInfo"
 		COMMAND ${CMAKE_COMMAND} -E touch "${ResourceObjectsDir}/AddOnResources.stamp"
 	)
@@ -215,10 +269,20 @@ file (GLOB AllCFiles
 	${AddOnSourcesFolder}/*/*/*.c
 )
 set_source_files_properties(${AllCFiles} PROPERTIES LANGUAGE CXX)
+# Objective-C++ sources are macOS-only (the native Save panel lives there); on
+# Windows the glob is simply empty, and listing it would make MSVC choke.
+if (NOT WIN32)
+	file (GLOB AddOnObjCSourceFiles
+		${AddOnSourcesFolder}/*.mm
+		${AddOnSourcesFolder}/*/*.mm
+		${AddOnSourcesFolder}/*/*/*.mm
+	)
+endif ()
 set (
 	AddOnFiles
 	${AddOnHeaderFiles}
 	${AddOnSourceFiles}
+	${AddOnObjCSourceFiles}
 )
 source_group ("Sources" FILES ${AddOnFiles})
 if (WIN32)

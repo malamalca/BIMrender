@@ -17,8 +17,16 @@ The provider, keys and model are configured from the palette's ⚙ settings.
 ```
 build.bat
 ```
-or via CMake presets (`ac29-INT`, …). The add-on name is taken from the folder
-name, so the output is `BIMrender.apx`.
+or via CMake presets (`ac30-INT`, `ac29-INT`, …). The add-on name is taken from
+the folder name, so the output is `BIMrender.apx`; `build.bat` copies each
+version's build into `Releases/`, the newest unsuffixed and the older ones with
+their version number: `BIMrender.apx` (Archicad 30), `BIMrender29.apx`,
+`BIMrender28.apx`, `BIMrender27.apx`. From Archicad 30 on these are not
+interchangeable — Archicad reads the version an add-on was built for from the
+`PRODUCTVERSION` field of its version resource and refuses a mismatch.
+
+Archicad 30 and newer use the resource compiler in [Tools/](Tools/README.md)
+instead of the one in the DevKit — see that README before upgrading the DevKit.
 
 ## Docs
 

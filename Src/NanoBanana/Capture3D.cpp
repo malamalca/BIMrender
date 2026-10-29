@@ -15,14 +15,31 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace NanoBanana {
 
-// TEMPORARY diagnostics for the missing settings dialog; remove once fixed.
+// Diagnostics for the operations that can only be observed inside a running
+// Archicad - the deferred tasks, the native dialogs. Off unless the log file's
+// folder is writable, which on both platforms it is.
+//
+// The path has to be built per platform: "/tmp" on Windows resolves against the
+// current drive's root, which usually does not exist, so this logged nothing
+// there at all.
 void NbDebugLog (const char* msg, long a)
 {
-    if (FILE* f = std::fopen ("/tmp/BIMrender_debug.log", "a")) {
+    std::string path;
+#if defined (WINDOWS)
+    if (const char* temp = std::getenv ("TEMP"))
+        path = std::string (temp) + "\\BIMrender_debug.log";
+    else
+        path = "C:\\BIMrender_debug.log";
+#else
+    path = "/tmp/BIMrender_debug.log";
+#endif
+
+    if (FILE* f = std::fopen (path.c_str (), "a")) {
         std::fprintf (f, msg, a);
         std::fprintf (f, "\n");
         std::fclose (f);

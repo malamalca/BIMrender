@@ -29,7 +29,10 @@
     }
 
     /* --- top bar --- */
-    #topbar { display: flex; align-items: center; gap: 8px; }
+    /* Wraps rather than overflowing: the palette can be dragged narrower than
+       the row of buttons, and nothing here may be pushed out of reach. */
+    #topbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    #topbar button { white-space: nowrap; }
     button {
         font: inherit; color: var(--text);
         background: var(--panel); border: 1px solid var(--border);
@@ -43,7 +46,7 @@
         font-weight: 600;
     }
     button.primary:hover:not(:disabled) { background: var(--accent-hi); }
-    #captureBtn { flex: 1; }
+    #captureBtn { flex: 1; min-width: 150px; }
     #settingsBtn { padding: 8px 10px; }
     .spacer { flex: 1; }
 
@@ -284,6 +287,7 @@
 
     <div id="topbar">
         <button id="captureBtn" disabled>📷 Capture Current 3D</button>
+        <button id="openBtn" title="Work on an image file instead of a 3D capture">📁 Open image…</button>
         <button id="markBtn" title="Mark a region of the image to edit" disabled>▱ Mark region</button>
         <span id="providerBadge" title="Active AI provider"><span class="dot"></span>…</span>
         <button id="settingsBtn" title="API key settings">⚙</button>
@@ -292,8 +296,9 @@
     <div id="stageWrap">
         <div id="placeholder">
             <div class="big">🍌</div>
-            Click <b>Capture Current 3D</b> to begin.<br>
-            <span style="font-size:11px">(the button enables while the 3D window is active)</span>
+            Click <b>Capture Current 3D</b> to begin,<br>
+            or <b>Open image…</b> to work on a file.<br>
+            <span style="font-size:11px">(capturing enables while the 3D window is active)</span>
         </div>
         <img id="imgAfter"  class="layer" alt="render">
         <img id="imgBefore" class="layer" alt="original">
@@ -312,6 +317,9 @@
         <div id="refThumbs"></div>
         <button id="addRefBtn" title="Add attachment image (max 5)">＋ Add</button>
         <input type="file" id="refFileInput" multiple accept="image/png,image/jpeg,image/webp" style="display:none">
+        <!-- Fallback picker for "Open image…" where the host cannot drive its
+             own Open dialog from the browser bridge (macOS). -->
+        <input type="file" id="openFileInput" accept="image/png,image/jpeg,image/webp" style="display:none">
     </div>
 
     <div id="promptTools">
@@ -371,7 +379,7 @@
         <button id="undoBtn" disabled title="Step back one edit">↶ Undo</button>
         <button id="resetBtn" disabled title="Discard edits and start again from the captured image">Start over</button>
         <button id="placeBtn" disabled title="Place the render into the active Archicad window as a picture">🖼 Place</button>
-        <button id="saveBtn" disabled title="Save last AI render to disk">💾 Save</button>
+        <button id="saveBtn" disabled title="Save the last AI render to a file you choose">💾 Save as…</button>
         <button id="sendBtn" class="primary" disabled>Send</button>
     </div>
 
@@ -382,6 +390,7 @@
     "use strict";
 
     var captureBtn  = document.getElementById('captureBtn');
+    var openBtn     = document.getElementById('openBtn');
     var settingsBtn = document.getElementById('settingsBtn');
     var sendBtn     = document.getElementById('sendBtn');
     var resetBtn    = document.getElementById('resetBtn');
@@ -403,6 +412,7 @@
     var refThumbs   = document.getElementById('refThumbs');
     var addRefBtn   = document.getElementById('addRefBtn');
     var refFileInput= document.getElementById('refFileInput');
+    var openFileInput = document.getElementById('openFileInput');
     var maxRefs     = 5;
     var referenceImages = [];   // base64 data URLs, persists across renders
 
@@ -476,10 +486,16 @@
                 captureBtn.title = "";
                 // Leave error messages visible until the next user action.
                 if (!currentDataUrl && statusEl.className !== "error")
-                    setStatus("Click “Capture Current 3D” to begin.");
+                    setStatus("Capture the 3D view, or open an image file, to begin.");
             } else {
                 captureBtn.title = "Switch to the 3D window to enable capturing";
-                setStatus("Switch to the 3D window to capture a view.", true);
+                // Only nag about the 3D window while there is nothing to work
+                // on. With an image already loaded — an opened file, or a
+                // capture taken before the window changed — capturing is not
+                // what the user is about to do, and this would bury the real
+                // status under a red error.
+                if (!currentDataUrl)
+                    setStatus("Switch to the 3D window to capture a view, or open an image file.", true);
             }
         });
     }
@@ -506,7 +522,15 @@
         });
     }
 
-    setInterval(function () { refreshThreeD(); refreshProvider(); refreshCanPlace(); }, 1000);
+    // Paused while a deferred task is in flight. Two reasons: its three bridge
+    // calls would each hop to the host's main thread, which a modal dialog
+    // (save, settings) is blocking until the user answers it, and refreshThreeD
+    // would overwrite the status line the task has just set ("Choose where to
+    // save…"). The task's own completion refreshes everything anyway.
+    setInterval(function () {
+        if (taskBusy) return;
+        refreshThreeD(); refreshProvider(); refreshCanPlace();
+    }, 1000);
 
     // ---- compare slider ----------------------------------------------
     function applySlider() {
@@ -558,6 +582,28 @@
     // up by polling GetCaptureResult until it stops returning "PENDING".
     var capturing = false;
 
+    // Takes a fresh source image — a 3D capture, or a file opened with
+    // "Open image…" — as the thing edits start from, and resets everything that
+    // belonged to the previous one.
+    function useSourceImage(dataUrl, readyMsg) {
+        originalDataUrl = dataUrl;
+        currentDataUrl  = dataUrl;   // edits start from the source image
+        history = [dataUrl];
+        iteration = 0;
+        imgBefore.src = dataUrl;
+        imgBefore.style.display = "block";
+        placeholder.style.display = "none";
+        showCompare(false);     // a fresh source clears any previous render
+        sendBtn.disabled = false;
+        saveBtn.disabled = false;
+        updatePlaceBtn();
+        resetBtn.disabled = true;
+        undoBtn.disabled  = true;
+        markBtn.disabled  = false;
+        clearRegion();          // a new source invalidates any marked region
+        setStatus(readyMsg);
+    }
+
     function finishCapture(dataUrl) {
         capturing = false;
         if (!dataUrl || dataUrl.indexOf("ERROR:") === 0) {
@@ -565,22 +611,7 @@
                               : "Could not capture. Make sure the 3D window is active.", true);
             return;
         }
-        originalDataUrl = dataUrl;
-        currentDataUrl  = dataUrl;   // edits start from the capture
-        history = [dataUrl];
-        iteration = 0;
-        imgBefore.src = dataUrl;
-        imgBefore.style.display = "block";
-        placeholder.style.display = "none";
-        showCompare(false);     // fresh capture clears any previous render
-        sendBtn.disabled = false;
-        saveBtn.disabled = false;
-        updatePlaceBtn();
-        resetBtn.disabled = true;
-        undoBtn.disabled  = true;
-        markBtn.disabled  = false;
-        clearRegion();          // a new capture invalidates any marked region
-        setStatus("Captured. Enter an instruction and press Send.");
+        useSourceImage(dataUrl, "Captured. Enter an instruction and press Send.");
     }
 
     captureBtn.addEventListener('click', function () {
@@ -597,6 +628,93 @@
             }
             pollTask(finishCapture, 15000);
         });
+    });
+
+    // ---- open an image file instead of capturing ----------------------
+    // Two routes to the same place. The host's own Open dialog is preferred:
+    // it is Archicad's dialog, it filters on the real file types and it
+    // remembers the folder. Where it cannot be driven from the browser bridge
+    // the host answers "NODIALOG" and the page asks with its own hidden
+    // <input type="file">, which works on both platforms — it is what the
+    // attachment picker uses.
+    var maxSourceEdge = 2048;   // long edge; see normalizeSourceImage
+
+    // A capture is sized to the 3D window, but an opened file can be a 24 MP
+    // photo: too big to send and pointless anyway, since the models normalize
+    // their output to about 1 MP. Anything larger is scaled down.
+    // The format is preserved where it matters — a PNG stays PNG so a render
+    // keeps its lossless source and its alpha, anything else becomes JPEG
+    // rather than ballooning a photo into a multi-megabyte PNG. An image that
+    // is already small enough and already PNG or JPEG is passed through
+    // untouched.
+    function normalizeSourceImage(dataUrl, callback) {
+        var isPng  = dataUrl.indexOf("data:image/png") === 0;
+        var isJpeg = dataUrl.indexOf("data:image/jpeg") === 0;
+        var im = new Image();
+        im.onerror = function () { callback(null); };
+        im.onload = function () {
+            var w = im.naturalWidth  || im.width;
+            var h = im.naturalHeight || im.height;
+            if (!w || !h) { callback(null); return; }
+
+            var scale = Math.min(1, maxSourceEdge / Math.max(w, h));
+            if (scale === 1 && (isPng || isJpeg)) { callback(dataUrl); return; }
+
+            var c = document.createElement('canvas');
+            c.width  = Math.max(1, Math.round(w * scale));
+            c.height = Math.max(1, Math.round(h * scale));
+            var ctx = c.getContext('2d');
+            if (!isPng) {                       // JPEG has no alpha
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, c.width, c.height);
+            }
+            ctx.drawImage(im, 0, 0, c.width, c.height);
+            callback(isPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.92));
+        };
+        im.src = dataUrl;
+    }
+
+    function acceptOpenedImage(dataUrl) {
+        setStatus("Preparing the image…");
+        normalizeSourceImage(dataUrl, function (ready) {
+            if (!ready) { setStatus("That image could not be read.", true); return; }
+            useSourceImage(ready, "Image opened. Enter an instruction and press Send.");
+        });
+    }
+
+    openBtn.addEventListener('click', function () {
+        if (capturing || taskBusy || isRendering) return;
+        taskBusy = true;
+        setStatus("");   // this click is the next user action; drop a stale error
+        ARUTILS.LoadImage().then(function (started) {
+            if (started === "NODIALOG") {       // host cannot ask; the page does
+                taskBusy = false;
+                openFileInput.value = '';       // so re-picking the same file fires change
+                openFileInput.click();
+                return;
+            }
+            if (!asBool(started)) {
+                taskBusy = false;
+                setStatus(startFailMsg(started, "Could not open an image."), true);
+                return;
+            }
+            setStatus("Choose an image…");
+            pollTask(function (res) {
+                if (typeof res === "string" && res.indexOf("LOADED:") === 0)
+                    acceptOpenedImage(res.substring(7));
+                else if (res === "CANCELLED")
+                    setStatus("");
+                else
+                    setStatus(startFailMsg(res, "Could not open that image."), true);
+            }, 0);
+        });
+    });
+
+    openFileInput.addEventListener('change', function () {
+        var file = this.files && this.files[0];
+        this.value = '';
+        if (!file) return;
+        fileToDataUrl(file, acceptOpenedImage);
     });
 
     // ---- apply the working state at history[history.length-1] ----------
@@ -822,6 +940,7 @@
         sendBtn.disabled = true;
         sendBtn.innerHTML = '<span class="btn-spinner"></span>Rendering…';
         captureBtn.disabled = true;
+        openBtn.disabled = true;
         setStatus("Image sent to server, processing…");
 
         // A marked region edits only that area.  The payload depends on the
@@ -866,6 +985,7 @@
                     sendBtn.innerHTML = 'Send';
                     sendBtn.disabled = false;
                     captureBtn.disabled = false;       // instant feedback; the poll keeps it correct
+                    openBtn.disabled = false;
                     if (typeof result === "string" && result.indexOf("ERROR:") === 0) {
                         setStatus(result.substring(6).trim(), true);
                         promptEl.focus();
@@ -890,6 +1010,7 @@
                     sendBtn.innerHTML = 'Send';
                     sendBtn.disabled = false;
                     captureBtn.disabled = false;
+                    openBtn.disabled = false;
                     setStatus("Render failed: " + (err && err.message ? err.message : err), true);
                 });
             });
@@ -1022,17 +1143,30 @@
     });
 
     // ---- save image to disk -------------------------------------------
+    // SaveImage only *starts* the save: the host opens its native Save dialog
+    // from the event loop (a modal dialog may not run inside a browser bridge
+    // callback), so the outcome arrives through the same GetAsyncResult poll as
+    // the capture. The poll gets no timeout — the dialog stays open until the
+    // user answers it. Where the host has no usable Save dialog it writes to
+    // its own folder instead and the result looks the same.
     saveBtn.addEventListener('click', function () {
         if (!currentDataUrl || taskBusy) return;
         taskBusy = true;
-        // SaveImage auto-saves to a folder and resolves with "SAVED:<path>"
-        // (no dialog on the host), or an "ERROR: ..." string.
-        ARUTILS.SaveImage(currentDataUrl).then(function (res) {
-            taskBusy = false;
-            if (typeof res === "string" && res.indexOf("SAVED:") === 0)
-                setStatus("Saved to " + res.substring(6));
-            else
-                setStatus(startFailMsg(res, "Could not save the image."), true);
+        setStatus("Choose where to save…");
+        ARUTILS.SaveImage(currentDataUrl).then(function (started) {
+            if (!asBool(started)) {
+                taskBusy = false;
+                setStatus(startFailMsg(started, "Could not save the image."), true);
+                return;
+            }
+            pollTask(function (res) {
+                if (typeof res === "string" && res.indexOf("SAVED:") === 0)
+                    setStatus("Saved to " + res.substring(6));
+                else if (res === "CANCELLED")
+                    setStatus("");
+                else
+                    setStatus(startFailMsg(res, "Could not save the image."), true);
+            }, 0);
         });
     });
 

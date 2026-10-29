@@ -34,11 +34,12 @@ JS object named `ARUTILS`, registered by `RegisterJavaScriptObject()` via
 |------------------|-----------|---------|
 | `Is3DActive()` | page → AC | Is the 3D window the active one? |
 | `Capture3D()` | page → AC | Capture the 3D view → PNG data URL. |
+| `LoadImage()` | page → AC | Start opening an image file to work on instead of a capture; the page polls `GetAsyncResult` for `"LOADED:<data URL>"` / `"CANCELLED"`, or gets `"NODIALOG"` and asks with its own file input. |
 | `HasApiKey()` | page → AC | Is the active provider configured? (`IsConfigured()`) |
 | `OpenSettings()` | page → AC | Open the settings dialog; returns whether configured afterward. |
 | `Render(args)` | page → AC | Send the image(s) + prompt to the active provider; resolve with the result data URL or `"ERROR: …"`. |
 | `GetProvider()` | page → AC | Active backend (`"gemini" \| "flux" \| "local"`); the page uses it to choose the region-edit payload. |
-| `SaveImage(dataUrl)` | page → AC | Native save dialog for the last render. |
+| `SaveImage(dataUrl)` | page → AC | Start saving the last render; the host opens its native Save dialog from the event loop and the page polls `GetAsyncResult` for `"SAVED:<path>"` / `"CANCELLED"`. |
 
 > **Threading note.** The `Render` bridge call ties up the UI thread while the
 > request is in flight. The page therefore sets the "processing…" status and
@@ -61,6 +62,32 @@ JS object named `ARUTILS`, registered by `RegisterJavaScriptObject()` via
 width/height fields, so Archicad saves at the **current 3D window's on-screen
 pixel size**. The input resolution therefore varies with window/monitor size
 and can exceed 1 MP.
+
+### Opening an image file instead
+
+**Open image…** replaces the capture as the thing edits start from — the same
+`useSourceImage()` path, so the compare slider, Mark region, Undo, Place and
+Save behave identically afterwards. It needs no 3D window, so the button is
+always live.
+
+There are two routes to it, and the page tries them in order:
+
+1. **The host's own Open dialog** (`ARUTILS.LoadImage` →
+   `NanoBanana::LoadImageWithDialog`). Archicad's `DG::FileDialog`, run in a
+   deferred UI task exactly like the Save dialog, filtering on PNG / JPEG /
+   WebP and reopening in the folder the last image came from. The file's format
+   is taken from its **magic bytes**, not its name, and anything that is not one
+   of those three is refused. Files over 32 MB are refused before being read.
+2. **The page's own `<input type="file">`**, when the host answers `"NODIALOG"`.
+   That is macOS today, for the reason given under the Save dialog; it is the
+   same picker the attachment list uses, so it works on both platforms.
+
+Either way the data URL lands in `normalizeSourceImage()`, which scales the
+image down to 2048 px on the long edge if it is larger. A PNG stays PNG, so a
+source image keeps its alpha and stays lossless like a capture; anything else
+becomes JPEG q0.92 rather than ballooning a photo into a multi-megabyte PNG. An
+image that is already small enough and already PNG or JPEG is passed through
+untouched.
 
 ---
 
@@ -146,6 +173,7 @@ the APIs differ in how they accept a region:
 | Stage | Format | Size |
 |-------|--------|------|
 | 3D capture (input / working / original) | PNG, lossless | = 3D window pixels (variable, can be > 1 MP) |
+| Opened image file (input / working / original) | PNG stays PNG, anything else → JPEG q0.92 | capped at 2048 px on the long edge; passed through untouched when already smaller and already PNG or JPEG |
 | Attachments (upload) | JPEG q0.9 | re-encoded; much smaller than source PNG |
 | Request body | base64 in JSON | ~+33 % over raw bytes |
 | Model output | PNG (Gemini) | ~1024 px on the long edge (~1 MP), model-fixed |
@@ -289,8 +317,22 @@ with `"ERROR: "`. In `doRender().then(...)` the page:
    stack (bounded by `maxHistory`), updates the before/after compare slider,
    enables **Save**, and clears the prompt for the next instruction.
 
-**Save** (`ARUTILS.SaveImage`) decodes the data URL and writes the bytes to a
-file chosen via a native dialog, picking the extension from the data-URL mime.
+**Save as…** (`ARUTILS.SaveImage`) decodes the data URL and writes the bytes to
+a file the user picks in the host's native Save dialog, with the extension taken
+from the data-URL mime. A modal dialog may not be opened inside a browser bridge
+callback, so `SaveImage` only *starts* the save: it posts a deferred UI task
+(`StartDeferredUiTask`, the same dispatch the settings dialog uses) and the page
+polls `GetAsyncResult` with no timeout, since the dialog stays open until the
+user answers it. The dialog opens where the previous save went, for the lifetime
+of the Archicad session.
+
+On macOS the native Save panel cannot be driven from there yet - its own modal
+run loop does not pump the JavaScript engine's message pump - so
+`NanoBanana::IsSaveDialogAvailable()` returns false there and the task writes
+into `<Documents>/BIMrender` under a non-colliding name and reveals the file
+instead, which is what every platform did before.
+`Src/NanoBanana/SaveImageFile.cpp` carries the notes for implementing the Mac
+path as an asynchronous sheet.
 
 ---
 

@@ -5,3 +5,4 @@ out/*
 CMakeUserPresets.json
 .pi/*
 .claude/*
+__pycache__/
